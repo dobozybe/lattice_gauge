@@ -1,0 +1,2 @@
+1. Fix links: a link should be one object that, when referenced, has an orientation,
+ and then its "getmatrix" method returns either a matrix or a conjugate transpose depending on orientation.
