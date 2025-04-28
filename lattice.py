@@ -2,10 +2,13 @@ import numpy as np
 from node_links import *
 import random
 import time
+import scipy.stats
 
 
 def get_identity(position, direction):
     return np.diag(np.full(2, 1))
+
+
 
 def randomSU2():
     alpha = random.random() * 2 * np.pi
@@ -15,6 +18,7 @@ def randomSU2():
     b = np.exp(gamma*1j) * np.cos(beta)
     matrix = np.array([[a, -np.conj(b)],[b, np.conj(a)]])
     return matrix
+
 
 def inSU2(matrix):
     determinant1 = (np.round(np.linalg.det(matrix), 10) == np.float64(1))
@@ -192,8 +196,11 @@ class Lattice:  # ND torus lattice
             else:
                 pass
         action = 2 * num_plaquettes - action_sum
+        if np.imag(action) > 0.0001:
+            print("Warning: Action is Complex")
+            return action
         print("action found in ", time.time()-starttime)
-        return action
+        return np.real(action)
         """
         if np.imag(action) == 0:
             return np.real(action)
@@ -204,6 +211,8 @@ class Lattice:  # ND torus lattice
     def minimize_link_action(self,link):
         """Find all plaquettes the link contributes to"""
         Vdagsum = np.full((2,2), 0 + 0j) #for SU(2)
+        #start_action = self.get_action()
+        #print("Start action:", start_action)
         for plane in self.planeslist:
             if link.direction in plane:
                 this_plane = plane.copy()
@@ -227,14 +236,16 @@ class Lattice:  # ND torus lattice
                                       )
                 Vdagsum += Vdagmatrix_node
                 Vdagsum += Vdagmatrix_complement
+        Vdagsum[0][1] = -np.conj(Vdagsum[1][0]) #correcting entries of Vdagsum so that it doesn't drift from a real number times an SU2 matrix
+        Vdagsum[1][1] = np.conj(Vdagsum[0][0])
         if np.linalg.det(Vdagsum) == 0:
             print("Division by zero encountered")
             print(Vdagsum)
             return
-        #original_contrib = -np.trace(link.get_matrix() @ Vdagsum) #trace (U times vdag) is the original contribution to the action
-        rsquared = np.linalg.det(Vdagsum)
-        #new_contrib = -2 * np.sqrt(rsquared)
-        Wdag = Vdagsum/(rsquared**(0.5)) #since Wdag = Vsum/r, r = sqrt(det(Vsum)) (since det(Wdag = 1)). Then we can get Wdag from Vsum.
+        original_contrib = -np.trace(link.get_matrix() @ Vdagsum) #trace (U times vdag) is the original contribution to the action
+        rsquared = np.real(np.linalg.det(Vdagsum))
+        new_contrib = -2* np.sqrt(rsquared)
+        Wdag = Vdagsum/(np.sqrt(rsquared)) #since Wdag = Vsum/r, r = sqrt(det(Vsum)) (since det(Wdag = 1)). Then we can get Wdag from Vsum.
         if not inSU2(Wdag):
             print("Warning! No longer in SU(2)!")
             return 1
@@ -242,29 +253,35 @@ class Lattice:  # ND torus lattice
         #It should also deal with the reverse link matrix (since the link *is* the reverse link)
         if  link.student_link != None: #update the student if there is one
             link.student_link.update()
-        #action_delta = new_contrib - original_contrib
-        print("Link Updated Correctly")
-        return #action_delta
+        action_delta = new_contrib - original_contrib
+        #print("Calculated final action", start_action + action_delta)
+        #print("True final action:", self.get_action())
+        return np.real(action_delta)
 
-    def action_min_sweep(self, nsweeps): #1 sweep about 23 secs (not including action calculation time (about 5 seconds)
-        actionlist = [self.get_action()]
+    def action_min_sweep(self, nsweeps): #1 sweep about 8.5 secs
+        actionlist = np.zeros(nsweeps + 1)
+        start_action = self.get_action()
+        differencelist = [0]
+        saved_actionlist = [start_action]
+        actionlist[0] += start_action
         print("Starting Action:", actionlist[0])
         for i in range(nsweeps):
+            j = i+1
             starttime = time.time()
-            actionlist.append(actionlist[i-1])
+            actionlist[j] += actionlist[j-1]
             print("Sweep Number: ", i)
             for node in self.nodelist:
                 if not (True in node.ghost_node):
                     for link in node.getlinks():
                         action_change = self.minimize_link_action(link[0]) #only use the forward facing link
-                        #print(type(action_change))
-                        #actionlist[i] = actionlist[i] + action_change #this maybe will save time on needing to call get_action each loop?
+                        actionlist[j] += action_change #this maybe will save time on needing to call get_action each loop?
             this_step_action = self.get_action()
             print("Action after sweep:", this_step_action)
-            print("Calculated action after sweep:", actionlist[i])
-            actionlist[i] = this_step_action
+            print("Calculated action after sweep:", actionlist[j])
+            differencelist.append(this_step_action-actionlist[j])
+            saved_actionlist.append(this_step_action)
             print("Sweep done in:", time.time()-starttime)
-        return actionlist
+        return actionlist, saved_actionlist, differencelist
 
 
 
