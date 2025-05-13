@@ -40,7 +40,7 @@ class Link:  # links are oriented from node1 to node2
         self.node1 = node1
         self.node2 = node2
         self.direction = direction
-        self.student_link = None
+        self.student_links = []
         self.matrix = np.diag(np.full(2, 1))
         node1.addlink(self, 0)
         node2.addlink(self, 1)
@@ -48,14 +48,14 @@ class Link:  # links are oriented from node1 to node2
     def get_matrix(self): #if link connects node to node further along the lattice, return matrix. If it points back, return conjugate of matrix
         return self.matrix
 
-
     def set_matrix(self, newmatrix):
         self.matrix = newmatrix
-        if self.student_link != None:
-            self.student_link.update()
+        if self.student_links != []:
+            for student_link in self.student_links:
+                student_link.update()
 
     def set_student_link(self,link):
-        self.student_link = link
+        self.student_links.append(link)
 
     def __str__(self):
         if self.node1.coordinates[self.direction] < self.node2.coordinates[self.direction]:
@@ -72,7 +72,7 @@ class StudentLink(Link):
         self.node2 = node2
         self.direction = direction
         self.parent_link = None
-        self.student_link = None #should always be none. Students shouldn't have students.
+        self.student_links = [] #should always be empty. Students shouldn't have students.
         self.matrix = np.diag(np.full(2, 1))
         node1.addlink(self, 0)
         node2.addlink(self, 1)

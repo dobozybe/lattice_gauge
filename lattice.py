@@ -1,6 +1,7 @@
 import numpy as np
 from node_links import *
 import random
+import matplotlib.pyplot as plt
 import time
 import scipy.stats
 
@@ -134,7 +135,6 @@ class Lattice:  # ND torus lattice
                         new_link.set_matrix( #todo: implement twists. Right now this is periodic BCs.
                             np.diag([1,1]) @ identified_link_matrix
                         )
-
                         new_link.set_parent(identified_link)
 
     def get_plaquette_corners(self, node, plane): #with corner as bottom left point in plaquette
@@ -182,6 +182,7 @@ class Lattice:  # ND torus lattice
             product = product @ matrix
         return product
 
+
     def get_action(self):
         starttime = time.time()
         action_sum = 0
@@ -199,7 +200,7 @@ class Lattice:  # ND torus lattice
         if np.imag(action) > 0.0001:
             print("Warning: Action is Complex")
             return action
-        print("action found in ", time.time()-starttime)
+        #print("action found in ", time.time()-starttime)
         return np.real(action)
         """
         if np.imag(action) == 0:
@@ -211,7 +212,6 @@ class Lattice:  # ND torus lattice
     def minimize_link_action(self,link):
         """Find all plaquettes the link contributes to"""
         Vdagsum = np.full((2,2), 0 + 0j) #for SU(2)
-        #start_action = self.get_action()
         #print("Start action:", start_action)
         for plane in self.planeslist:
             if link.direction in plane:
@@ -219,10 +219,8 @@ class Lattice:  # ND torus lattice
                 link_direction = link.direction
                 this_plane.remove(link_direction)
                 orthogonal_direction = this_plane[0]  # gives direction in plane orthogonal to link
-
                 node = link.node1
                 complement_node = self.translate(node, orthogonal_direction, -1) #other node whose plaquette in that plane will contain that link
-
                 #This logic is good (checked thrice)
 
                 Vdagmatrix_node = (self.translate(node, link_direction, 1).get_link(orthogonal_direction, 0).get_matrix()
@@ -244,45 +242,50 @@ class Lattice:  # ND torus lattice
             return
         original_contrib = -np.trace(link.get_matrix() @ Vdagsum) #trace (U times vdag) is the original contribution to the action
         rsquared = np.real(np.linalg.det(Vdagsum))
-        new_contrib = -2* np.sqrt(rsquared)
         Wdag = Vdagsum/(np.sqrt(rsquared)) #since Wdag = Vsum/r, r = sqrt(det(Vsum)) (since det(Wdag = 1)). Then we can get Wdag from Vsum.
+        new_contrib = - np.trace(Wdag.conj().T @ Vdagsum) #should be equal to -2r
+        #print("calculated:", new_contrib, " should be:", -2*np.sqrt(rsquared))
         if not inSU2(Wdag):
             print("Warning! No longer in SU(2)!")
             return 1
         link.set_matrix(Wdag.conj().T) #set the matrix of our link to the dagger of Wdag. This should minimize this link's contribution to the action per FDW paper.
         #It should also deal with the reverse link matrix (since the link *is* the reverse link)
-        if  link.student_link != None: #update the student if there is one
-            link.student_link.update()
+        if  link.student_links != []: #update the student if there is one
+            for student_link in link.student_links:
+                student_link.update()
         action_delta = new_contrib - original_contrib
-        #print("Calculated final action", start_action + action_delta)
-        #print("True final action:", self.get_action())
         return np.real(action_delta)
+
+    def lattice_sweep(self,initial_action):
+        starttime = time.time()
+        actionchanges = []
+        action = initial_action
+        original_action_changes = []
+        print("Sweeping")
+        for node in self.nodelist:
+            if not (True in node.ghost_node):
+                for link in node.getlinks():
+                    action_change = self.minimize_link_action(
+                        link[0])  # only use the forward facing link
+                    if action_change=="Error":
+                        return
+                    actionchanges.append(action_change)
+                    action += action_change  # this maybe will save time on needing to call get_action each loop?
+        print("Sweep Completed in", time.time()-starttime)
+        return action
 
     def action_min_sweep(self, nsweeps): #1 sweep about 8.5 secs
         actionlist = np.zeros(nsweeps + 1)
         start_action = self.get_action()
-        differencelist = [0]
-        saved_actionlist = [start_action]
         actionlist[0] += start_action
         print("Starting Action:", actionlist[0])
         for i in range(nsweeps):
-            j = i+1
-            starttime = time.time()
-            actionlist[j] += actionlist[j-1]
-            print("Sweep Number: ", i)
-            for node in self.nodelist:
-                if not (True in node.ghost_node):
-                    for link in node.getlinks():
-                        action_change = self.minimize_link_action(link[0]) #only use the forward facing link
-                        actionlist[j] += action_change #this maybe will save time on needing to call get_action each loop?
-            this_step_action = self.get_action()
-            print("Action after sweep:", this_step_action)
-            print("Calculated action after sweep:", actionlist[j])
-            differencelist.append(this_step_action-actionlist[j])
-            saved_actionlist.append(this_step_action)
-            print("Sweep done in:", time.time()-starttime)
-        return actionlist, saved_actionlist, differencelist
-
+            new_action = self.lattice_sweep(actionlist[i])
+            actionlist[i+1] += new_action
+            print("Calculated action after sweep:", actionlist[i+1])
+        plt.plot(actionlist, marker = "o", linestyle = "")
+        plt.show()
+        return actionlist
 
 
 
