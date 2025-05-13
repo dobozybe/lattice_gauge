@@ -243,7 +243,7 @@ class Lattice:  # ND torus lattice
         original_contrib = -np.trace(link.get_matrix() @ Vdagsum) #trace (U times vdag) is the original contribution to the action
         rsquared = np.real(np.linalg.det(Vdagsum))
         Wdag = Vdagsum/(np.sqrt(rsquared)) #since Wdag = Vsum/r, r = sqrt(det(Vsum)) (since det(Wdag = 1)). Then we can get Wdag from Vsum.
-        new_contrib = - np.trace(Wdag.conj().T @ Vdagsum) #should be equal to -2r
+        new_contrib = - 2 * np.sqrt(rsquared) #should be equal to -2r
         #print("calculated:", new_contrib, " should be:", -2*np.sqrt(rsquared))
         if not inSU2(Wdag):
             print("Warning! No longer in SU(2)!")
@@ -262,19 +262,25 @@ class Lattice:  # ND torus lattice
         action = initial_action
         original_action_changes = []
         print("Sweeping")
+        for direction in range(len(self.shape)):
+            for node in self.nodelist:
+                if not (True in node.ghost_node):
+                    action_change = self.minimize_link_action(node.get_link(direction, 0))
+                    actionchanges.append(action_change)
+                    action += action_change
+        """
         for node in self.nodelist:
             if not (True in node.ghost_node):
                 for link in node.getlinks():
                     action_change = self.minimize_link_action(
                         link[0])  # only use the forward facing link
-                    if action_change=="Error":
-                        return
                     actionchanges.append(action_change)
                     action += action_change  # this maybe will save time on needing to call get_action each loop?
+        """
         print("Sweep Completed in", time.time()-starttime)
         return action
 
-    def action_min_sweep(self, nsweeps): #1 sweep about 8.5 secs
+    def action_min_sweep(self, nsweeps): #1 sweep down to 7 seconds
         actionlist = np.zeros(nsweeps + 1)
         start_action = self.get_action()
         actionlist[0] += start_action

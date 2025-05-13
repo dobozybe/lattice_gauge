@@ -5,8 +5,9 @@ import numpy as np
 import copy
 
 
-myLattice = Lattice([7,7,7,7])
+myLattice = Lattice([24,6,6,24])
 
-myLattice.action_min_sweep(70)
+myLattice.action_min_sweep(10)
+print(myLattice.get_action())
 
 
