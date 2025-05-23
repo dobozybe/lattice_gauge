@@ -1,2 +1,4 @@
-1. Fix links: a link should be one object that, when referenced, has an orientation,
- and then its "getmatrix" method returns either a matrix or a conjugate transpose depending on orientation.
+1. Twists
+2. Save/Load
+3. View action density
+4. Multithreading for speed

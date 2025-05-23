@@ -3,6 +3,7 @@ from node_links import *
 import random
 import matplotlib.pyplot as plt
 import time
+import shelve
 import scipy.stats
 
 
@@ -28,12 +29,15 @@ def inSU2(matrix):
 
 
 class Lattice:  # ND torus lattice
-    def __init__(self, shape):
+    def __init__(self, shape, filename = None, twistmatrix = None):
         # dimensions should be an nd numpy array with each entry corresponding to the size of the array.
         # t should be the first dimension
         starttime = time.time()
         self.shape = shape
-        self.twists = {}
+        self.filename = filename
+        self.twistmatrix = np.zeroes((len(shape),len(shape)))
+        if twistmatrix!=None:
+            self.twistmatrix = twistmatrix
         self.paddedshape = []
         self.planeslist = []
         self.indexdict ={}
@@ -58,8 +62,10 @@ class Lattice:  # ND torus lattice
         for i in range(self.dimensions): #initialize planeslist
             for j in range(i):
                 self.planeslist.append([j,i])
-
-        self.make_links()
+        if self.filename==None:
+            self.make_links()
+        else:
+            self.load_links(self.filename)
         self.make_boundary_links()
         print("Initialized in:", time.time() - starttime)
 
@@ -137,6 +143,29 @@ class Lattice:  # ND torus lattice
                         )
                         new_link.set_parent(identified_link)
 
+    def B(self, mu, nu, position):
+        if (position[mu] == self.shape[mu]-1) and (position[nu] == self.shape[nu]-1):
+            return np.exp(-2 * np.pi * 1j * self.twistmatrix[mu][nu] / 2)
+        else:
+            return 1
+
+
+
+    def save_links(self,filename):
+        for node in self.nodelist:
+            for i in range(len(node.links)):
+                this_link = node.links[i][0]
+                with shelve.open(filename) as db:
+                    print(str(node.coordinates) + ":" + str(i))
+                    db[str(node.coordinates) + ":" + str(i)] = this_link
+
+    def load_links(self,filename):
+        db = shelve.open(filename)
+        for node in self.nodelist:
+            for i in range(len(node.links)):
+                this_link = db[str(node.coordinates) + ":" + str(i)]
+                node.links[i][0]=this_link
+
     def get_plaquette_corners(self, node, plane): #with corner as bottom left point in plaquette
         cornercoords = node.coordinates
         first_corner = cornercoords
@@ -184,7 +213,6 @@ class Lattice:  # ND torus lattice
 
 
     def get_action(self):
-        starttime = time.time()
         action_sum = 0
         loop_count = 0
         num_plaquettes = len(self.planeslist) * self.num_nodes
@@ -192,22 +220,14 @@ class Lattice:  # ND torus lattice
             if (not (True in node.ghost_node)):
                 for plane in self.planeslist:
                     loop_count +=1
-                    start_time = time.time()
-                    action_sum+= np.trace(self.get_plaquette_holonomy(node.coordinates, plane)) #2.2 of FDW paper
+                    action_sum+= np.trace(self.B(plane[0],plane[1], node.coordinates)*self.get_plaquette_holonomy(node.coordinates, plane)) #2.2 of FDW paper
             else:
                 pass
         action = 2 * num_plaquettes - action_sum
         if np.imag(action) > 0.0001:
             print("Warning: Action is Complex")
             return action
-        #print("action found in ", time.time()-starttime)
         return np.real(action)
-        """
-        if np.imag(action) == 0:
-            return np.real(action)
-        else:
-            return "Error: Action has imaginary part"
-        """
 
     def minimize_link_action(self,link):
         """Find all plaquettes the link contributes to"""
@@ -222,15 +242,12 @@ class Lattice:  # ND torus lattice
                 node = link.node1
                 complement_node = self.translate(node, orthogonal_direction, -1) #other node whose plaquette in that plane will contain that link
                 #This logic is good (checked thrice)
-
-                Vdagmatrix_node = (self.translate(node, link_direction, 1).get_link(orthogonal_direction, 0).get_matrix()
+                Vdagmatrix_node = (self.B(plane[0],plane[1], node.coordinates)* self.translate(node, link_direction, 1).get_link(orthogonal_direction, 0).get_matrix()
                                 @ self.translate(node, orthogonal_direction, 1).get_link(link_direction, 0).get_matrix().conj().T
                                 @ node.get_link(orthogonal_direction, 0).get_matrix().conj().T) #formula worked out in notebook (twice. This is verified).
-                Vdagmatrix_complement = (self.twistGenFunc(self.translate(node, link_direction, 1), orthogonal_direction).conj().T
-                                      @self.translate(complement_node, link_direction, 1).get_link(orthogonal_direction, 0).get_matrix().conj().T
+                Vdagmatrix_complement = (self.B(plane[0],plane[1], complement_node).conj() * self.translate(complement_node, link_direction, 1).get_link(orthogonal_direction, 0).get_matrix().conj().T
                                       @ complement_node.get_link(link_direction,0).get_matrix().conj().T
                                       @complement_node.get_link(orthogonal_direction, 0).get_matrix()
-                                      @self.twistGenFunc(node, orthogonal_direction)
                                       )
                 Vdagsum += Vdagmatrix_node
                 Vdagsum += Vdagmatrix_complement
@@ -261,6 +278,7 @@ class Lattice:  # ND torus lattice
         actionchanges = []
         action = initial_action
         original_action_changes = []
+        contribution_counter = 0
         print("Sweeping")
         for direction in range(len(self.shape)):
             for node in self.nodelist:
@@ -281,6 +299,7 @@ class Lattice:  # ND torus lattice
         return action
 
     def action_min_sweep(self, nsweeps): #1 sweep down to 7 seconds
+        start_time = time.time()
         actionlist = np.zeros(nsweeps + 1)
         start_action = self.get_action()
         actionlist[0] += start_action
@@ -290,6 +309,7 @@ class Lattice:  # ND torus lattice
             actionlist[i+1] += new_action
             print("Calculated action after sweep:", actionlist[i+1])
         plt.plot(actionlist, marker = "o", linestyle = "")
+        print("total time:", time.time() - start_time)
         plt.show()
         return actionlist
 
