@@ -6,13 +6,13 @@ import copy
 import sys
 import shelve
 
-"""myLattice = Lattice([24,6,6,24])
-myLattice.save_links("savedlattice")"""
+twistmatrix = [[0,0,0,1],[0,0,1,0],[0,1,0,0],[1,0,0,0]]
+myLattice = Lattice([24,6,6,24], twistmatrix = twistmatrix)
+
+myLattice.action_min_sweep(1000)
+myLattice.save_links("savedlattice.db")
 
 
-myLattice = Lattice([24,6,6,24], "savedlattice")
-print(myLattice[0,0,0,0].get_link(2,0).get_matrix())
-print(myLattice[0,0,0,0].get_link(2,0).node1)
 
 
 

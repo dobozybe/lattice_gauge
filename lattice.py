@@ -35,7 +35,7 @@ class Lattice:  # ND torus lattice
         starttime = time.time()
         self.shape = shape
         self.filename = filename
-        self.twistmatrix = np.zeroes((len(shape),len(shape)))
+        self.twistmatrix = np.zeros((len(shape),len(shape)))
         if twistmatrix!=None:
             self.twistmatrix = twistmatrix
         self.paddedshape = []
@@ -143,11 +143,12 @@ class Lattice:  # ND torus lattice
                         )
                         new_link.set_parent(identified_link)
 
-    def B(self, mu, nu, position):
+    def B(self, mu, nu, node):
+        position = node.coordinates
         if (position[mu] == self.shape[mu]-1) and (position[nu] == self.shape[nu]-1):
-            return np.exp(-2 * np.pi * 1j * self.twistmatrix[mu][nu] / 2)
+            return np.exp(-2 * np.pi * 1j * float(self.twistmatrix[mu][nu]) / 2)
         else:
-            return 1
+            return float(1)
 
 
 
@@ -220,7 +221,7 @@ class Lattice:  # ND torus lattice
             if (not (True in node.ghost_node)):
                 for plane in self.planeslist:
                     loop_count +=1
-                    action_sum+= np.trace(self.B(plane[0],plane[1], node.coordinates)*self.get_plaquette_holonomy(node.coordinates, plane)) #2.2 of FDW paper
+                    action_sum+= np.trace(self.B(plane[0],plane[1], node)*self.get_plaquette_holonomy(node.coordinates, plane)) #2.2 of FDW paper
             else:
                 pass
         action = 2 * num_plaquettes - action_sum
@@ -242,10 +243,10 @@ class Lattice:  # ND torus lattice
                 node = link.node1
                 complement_node = self.translate(node, orthogonal_direction, -1) #other node whose plaquette in that plane will contain that link
                 #This logic is good (checked thrice)
-                Vdagmatrix_node = (self.B(plane[0],plane[1], node.coordinates)* self.translate(node, link_direction, 1).get_link(orthogonal_direction, 0).get_matrix()
+                Vdagmatrix_node = (self.B(plane[0],plane[1], node)* self.translate(node, link_direction, 1).get_link(orthogonal_direction, 0).get_matrix()
                                 @ self.translate(node, orthogonal_direction, 1).get_link(link_direction, 0).get_matrix().conj().T
                                 @ node.get_link(orthogonal_direction, 0).get_matrix().conj().T) #formula worked out in notebook (twice. This is verified).
-                Vdagmatrix_complement = (self.B(plane[0],plane[1], complement_node).conj() * self.translate(complement_node, link_direction, 1).get_link(orthogonal_direction, 0).get_matrix().conj().T
+                Vdagmatrix_complement = (np.conjugate(self.B(plane[0],plane[1], complement_node)) * self.translate(complement_node, link_direction, 1).get_link(orthogonal_direction, 0).get_matrix().conj().T
                                       @ complement_node.get_link(link_direction,0).get_matrix().conj().T
                                       @complement_node.get_link(orthogonal_direction, 0).get_matrix()
                                       )
