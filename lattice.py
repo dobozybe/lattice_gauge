@@ -153,12 +153,20 @@ class Lattice:  # ND torus lattice
 
 
     def save_links(self,filename):
-        for node in self.nodelist:
-            for i in range(len(node.links)):
-                this_link = node.links[i][0]
-                with shelve.open(filename) as db:
-                    print(str(node.coordinates) + ":" + str(i))
-                    db[str(node.coordinates) + ":" + str(i)] = this_link
+        while True:
+            try:
+                for node in self.nodelist:
+                    for i in range(len(node.links)):
+                        this_link = node.links[i][0]
+                        with shelve.open(filename) as db:
+                            #print(str(node.coordinates) + ":" + str(i))
+                            db[str(node.coordinates) + ":" + str(i)] = this_link
+                print("saved")
+                break
+            except:
+                print("Broke at ", str(node.coordinates),".", "Trying again.")
+                pass
+        return 0
 
     def load_links(self,filename):
         db = shelve.open(filename)
@@ -313,6 +321,33 @@ class Lattice:  # ND torus lattice
         print("total time:", time.time() - start_time)
         plt.show()
         return actionlist
+
+    def action_density_plot(self, plane, planecoords): #plane coords should be other coordinates in order with the plane coordinates removed
+        xlist= range(self.shape[plane[0]])
+        ylist = range(self.shape[plane[1]])
+        actionlist = np.zeros((self.shape[plane[1]], self.shape[plane[0]]))
+        for node in self.nodelist:
+            if (np.delete(np.delete(node.coordinates, plane[1]),plane[0]) == planecoords).all():
+                if not (True in node.ghost_node):
+                    this_location = [node.coordinates[plane[0]], node.coordinates[plane[1]]]
+                    this_action = 2 - np.trace(self.B(plane[0],plane[1], node)*self.get_plaquette_holonomy(node.coordinates, plane))
+                    actionlist[int(this_location[1])][int(this_location[0])] = np.real(this_action) #first index selects row and second selects column
+        plt.pcolormesh(xlist, ylist, actionlist)
+        titlestring = "with x"
+        skipped = 0
+        for i in range(self.dimensions):
+            if i in plane:
+                skipped +=1
+                pass
+            else:
+                if i != self.dimensions - 1:
+                    titlestring += str(i) + " = " + str(planecoords[i-skipped]) + ", x"
+                else:
+                    titlestring += str(i) + " = " + str(planecoords[i - skipped])
+        plt.legend()
+        plt.title("Action Density in the "+ str(plane)+ " plane, with " + titlestring)
+        plt.show()
+
 
 
 
