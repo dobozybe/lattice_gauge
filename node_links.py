@@ -8,16 +8,17 @@ class Node:
         self.dimensions = len(coordinates)
         for direction in range(len(coordinates)):
             self.links.append([None, None])
-    def __getstate__(self):
+    """def __getstate__(self):
         return [self.coordinates, self.ghost_node]
     def __setstate__(self,state):
         self.coordinates = state[0]
         self.ghost_node = state[1]
+        print("calling node setstate for node", self.coordinates)
         self.links = []
         self.dimensions = len(self.coordinates)
         for direction in range(self.dimensions):
             self.links.append([None, None])
-        self.ghost_node = False
+        self.ghost_node = False"""
     def addlink(self, link, orientation):
         self.links[link.direction][orientation] = link  # orientation 0 means node is connected to node w/greater index (1 means smaller)
         return
@@ -53,13 +54,15 @@ class Link:  # links are oriented from node1 to node2
         self.matrix = np.diag(np.full(2, 1))
         node1.addlink(self, 0)
         node2.addlink(self, 1)
-    def __getstate__(self):
+    """def __getstate__(self): #should only give a dict of matrix, node1 coords, node2 coords, direction. should be all we need.
         return self.__dict__
 
     def __setstate__(self, state):
         self.__dict__ = state
+        print("calling setstate for", self)
         self.node1.addlink(self, 0)
         self.node1.addlink(self,1)
+        print("self set as:", self)"""
     def get_matrix(self): #if link connects node to node further along the lattice, return matrix. If it points back, return conjugate of matrix
         return self.matrix
 

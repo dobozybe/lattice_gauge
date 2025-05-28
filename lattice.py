@@ -4,13 +4,13 @@ import random
 import matplotlib.pyplot as plt
 import time
 import shelve
+import pickle
+from sympy import LeviCivita
 import scipy.stats
 
 
 def get_identity(position, direction):
     return np.diag(np.full(2, 1))
-
-
 
 def randomSU2():
     alpha = random.random() * 2 * np.pi
@@ -62,10 +62,7 @@ class Lattice:  # ND torus lattice
         for i in range(self.dimensions): #initialize planeslist
             for j in range(i):
                 self.planeslist.append([j,i])
-        if self.filename==None:
-            self.make_links()
-        else:
-            self.load_links(self.filename)
+        self.make_links()
         self.make_boundary_links()
         print("Initialized in:", time.time() - starttime)
 
@@ -109,18 +106,22 @@ class Lattice:  # ND torus lattice
             return False
 
     def make_links(self):
+        if self.filename!= None:
+            datafile = open(self.filename + ".pickle", "rb")
+            matrixdict = pickle.load(datafile)
         for node in self.nodelist:
-            for i in range(len(self.shape)):
-                these_coords = node.coordinates
-                max_node = self.shape[i]
-                if these_coords[i] < max_node:
-                    #if we're not in the padded part of the array (not a ghost node) link to the next node
+            if not (True in node.ghost_node):
+                # if we're not in the padded part of the array (not a ghost node) link to the next node in each direction
+                for i in range(len(self.shape)):
+                    these_coords = node.coordinates
                     new_coords = np.concatenate(
                         (these_coords[:i], [(these_coords[i] + 1)], these_coords[i + 1:]))
                     newlink=Link(node, self[new_coords], i)
-                    newlink.set_matrix(randomSU2())
-                else:
-                    pass
+                    if self.filename == None:
+                        newlink.set_matrix(randomSU2())
+                    else:
+                        this_matrix = matrixdict[str(these_coords) + ":" + str(i)]
+                        newlink.set_matrix(this_matrix)
         return
 
     def make_student_link_adjacent(self, node, direction):
@@ -135,12 +136,12 @@ class Lattice:  # ND torus lattice
                     if (node.ghost_node[i] and (not node.ghost_node[j])): #don't add links in the i direction (we're at the i boundary of the padded lattice)
                         new_link = self.make_student_link_adjacent(node, j)
                         identified_node_coordinates = node.coordinates.copy()
-                        identified_node_coordinates[i] = 0
+                        for k in range(self.dimensions):
+                            identified_node_coordinates[k] = identified_node_coordinates[k] % self.shape[k]
                         identified_link = self[identified_node_coordinates].get_link(j, 0)
                         identified_link_matrix = identified_link.get_matrix()
-                        new_link.set_matrix( #todo: implement twists. Right now this is periodic BCs.
-                            np.diag([1,1]) @ identified_link_matrix
-                        )
+                        #print(identified_link)
+                        new_link.set_matrix(identified_link_matrix)
                         new_link.set_parent(identified_link)
 
     def B(self, mu, nu, node):
@@ -153,7 +154,7 @@ class Lattice:  # ND torus lattice
 
 
     def save_links(self,filename):
-        while True:
+        """while True:
             try:
                 for node in self.nodelist:
                     for i in range(len(node.links)):
@@ -166,14 +167,17 @@ class Lattice:  # ND torus lattice
             except:
                 print("Broke at ", str(node.coordinates),".", "Trying again.")
                 pass
-        return 0
-
-    def load_links(self,filename):
-        db = shelve.open(filename)
+        return 0"""
+        matrixdict = {}
         for node in self.nodelist:
-            for i in range(len(node.links)):
-                this_link = db[str(node.coordinates) + ":" + str(i)]
-                node.links[i][0]=this_link
+            if not (True in node.ghost_node):
+                for i in range(len(node.links)):
+                    matrix_id = str(node.coordinates) + ":" + str(i)
+                    matrixdict[matrix_id] = node.get_link(i, 0).get_matrix()
+        with open(filename + ".pickle", "wb") as datafile:
+            pickle.dump(matrixdict, datafile, protocol=pickle.HIGHEST_PROTOCOL)
+
+
 
     def get_plaquette_corners(self, node, plane): #with corner as bottom left point in plaquette
         cornercoords = node.coordinates
@@ -227,6 +231,7 @@ class Lattice:  # ND torus lattice
         num_plaquettes = len(self.planeslist) * self.num_nodes
         for node in self.nodelist:
             if (not (True in node.ghost_node)):
+                #print(node.coordinates)
                 for plane in self.planeslist:
                     loop_count +=1
                     action_sum+= np.trace(self.B(plane[0],plane[1], node)*self.get_plaquette_holonomy(node.coordinates, plane)) #2.2 of FDW paper
@@ -288,7 +293,7 @@ class Lattice:  # ND torus lattice
         action = initial_action
         original_action_changes = []
         contribution_counter = 0
-        print("Sweeping")
+        #print("Sweeping")
         for direction in range(len(self.shape)):
             for node in self.nodelist:
                 if not (True in node.ghost_node):
@@ -307,13 +312,14 @@ class Lattice:  # ND torus lattice
         print("Sweep Completed in", time.time()-starttime)
         return action
 
-    def action_min_sweep(self, nsweeps): #1 sweep down to 7 seconds
+    def action_min_sweep(self, nsweeps): #1 sweep down to ~6 seconds. 1000 sweeps about 1.5 hours.
         start_time = time.time()
         actionlist = np.zeros(nsweeps + 1)
         start_action = self.get_action()
         actionlist[0] += start_action
         print("Starting Action:", actionlist[0])
         for i in range(nsweeps):
+            print("Sweep ", i)
             new_action = self.lattice_sweep(actionlist[i])
             actionlist[i+1] += new_action
             print("Calculated action after sweep:", actionlist[i+1])
@@ -347,6 +353,22 @@ class Lattice:  # ND torus lattice
         plt.legend()
         plt.title("Action Density in the "+ str(plane)+ " plane, with " + titlestring)
         plt.show()
+
+    def get_topological_charge(self):
+        runningsum = 0
+        indicies = [[i,j,k,l] for i in range(3) for j in range(3) for k in range(3) for l in range(3)]
+        for node in self.nodelist:
+            if not (True in node.ghost_node):
+                for index in indicies:
+                    civita = LeviCivita(index[0], index[1],index[2],index[3])
+                    if civita == 0:
+                        continue
+                    contribution = civita * np.trace(
+                        self.get_plaquette_holonomy(node.coordinates, [index[0], index[1]])
+                        @ self.get_plaquette_holonomy(node.coordinates, [index[2],index[3]])
+                    )
+                    runningsum += contribution
+        return -1/(32 * np.pi**2) * runningsum
 
 
 
