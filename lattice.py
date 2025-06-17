@@ -58,7 +58,7 @@ class Lattice:  # ND torus lattice
 
         for coordinates in tuplelist: #initialize nodes and add them to nodelist
             self.nodelist.append(Node(coordinates, is_ghost_node= [self.is_boundary(coordinates, i) for i in range(self.dimensions)]))#loops will ignore ghost nodes. If it's on the boundary it is a ghost node
-            self.indexdict[tuple(coordinates)] = self.get_node_index(coordinates)
+            self.indexdict[tuple(coordinates)] = self.nodelist[self.get_node_index(coordinates)]
         for i in range(self.dimensions): #initialize planeslist
             for j in range(i):
                 self.planeslist.append([j,i])
@@ -78,7 +78,7 @@ class Lattice:  # ND torus lattice
         return int(runningsum)
 
     def __getitem__(self, coordinates):
-        return self.nodelist[self.indexdict[tuple(coordinates)]]
+        return self.indexdict[tuple(coordinates)]
 
     def set_twists(self, twistdict):
         self.twists.update(twistdict)
@@ -267,18 +267,15 @@ class Lattice:  # ND torus lattice
                 Vdagsum += Vdagmatrix_complement
         Vdagsum[0][1] = -np.conj(Vdagsum[1][0]) #correcting entries of Vdagsum so that it doesn't drift from a real number times an SU2 matrix
         Vdagsum[1][1] = np.conj(Vdagsum[0][0])
-        if np.linalg.det(Vdagsum) == 0:
-            print("Division by zero encountered")
-            print(Vdagsum)
-            return
-        original_contrib = -np.trace(link.get_matrix() @ Vdagsum) #trace (U times vdag) is the original contribution to the action
         rsquared = np.real(np.linalg.det(Vdagsum))
+        original_contrib = -np.trace(link.get_matrix() @ Vdagsum) #trace (U times vdag) is the original contribution to the action
+
         Wdag = Vdagsum/(np.sqrt(rsquared)) #since Wdag = Vsum/r, r = sqrt(det(Vsum)) (since det(Wdag = 1)). Then we can get Wdag from Vsum.
         new_contrib = - 2 * np.sqrt(rsquared) #should be equal to -2r
         #print("calculated:", new_contrib, " should be:", -2*np.sqrt(rsquared))
-        if not inSU2(Wdag):
+        """if not inSU2(Wdag):
             print("Warning! No longer in SU(2)!")
-            return 1
+            return 1"""
         link.set_matrix(Wdag.conj().T) #set the matrix of our link to the dagger of Wdag. This should minimize this link's contribution to the action per FDW paper.
         #It should also deal with the reverse link matrix (since the link *is* the reverse link)
         if  link.student_links != []: #update the student if there is one
