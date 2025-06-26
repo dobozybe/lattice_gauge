@@ -7,6 +7,7 @@ import shelve
 import pickle
 from sympy import LeviCivita
 import scipy.stats
+import scipy.linalg as linalg
 
 
 def get_identity(position, direction):
@@ -33,6 +34,7 @@ class Lattice:  # ND torus lattice
         # dimensions should be an nd numpy array with each entry corresponding to the size of the array.
         # t should be the first dimension
         starttime = time.time()
+        self.SUN_dimension = 2
         self.shape = shape
         self.filename = filename
         self.twistmatrix = np.zeros((len(shape),len(shape)))
@@ -40,7 +42,10 @@ class Lattice:  # ND torus lattice
             self.twistmatrix = twistmatrix
         self.paddedshape = []
         self.planeslist = []
+
         self.indexdict ={}
+        self.link_dict = {}
+
         self.num_nodes = 1 #not including ghosts
         for i in shape:
             self.num_nodes *= i
@@ -52,6 +57,7 @@ class Lattice:  # ND torus lattice
         self.twistGenFunc = get_identity
         self.dimensions = len(shape)
         self.nodelist = []
+        self.real_nodearray = [] #np array of nodes that aren't ghost nodes
         tuplelist = []
         self.make_tuples(np.zeros(len(shape)), self.paddedshape, tuplelist)
 
@@ -59,12 +65,24 @@ class Lattice:  # ND torus lattice
         for coordinates in tuplelist: #initialize nodes and add them to nodelist
             self.nodelist.append(Node(coordinates, is_ghost_node= [self.is_boundary(coordinates, i) for i in range(self.dimensions)]))#loops will ignore ghost nodes. If it's on the boundary it is a ghost node
             self.indexdict[tuple(coordinates)] = self.nodelist[self.get_node_index(coordinates)]
+
+        for node in self.nodelist: #initialize real node array
+            if not True in node.ghost_node:
+                self.real_nodearray.append(node)
+        self.real_nodearray = np.array(self.real_nodearray)
+
+
         for i in range(self.dimensions): #initialize planeslist
             for j in range(i):
                 self.planeslist.append([j,i])
         self.make_links()
         self.make_boundary_links()
+
+
+        for node in self.nodelist:
+            self.link_dict[node] = np.array(node.links).T[0]
         print("Initialized in:", time.time() - starttime)
+
 
     def get_node_index(self, coordinates):
         coords = coordinates[::-1]
@@ -109,19 +127,18 @@ class Lattice:  # ND torus lattice
         if self.filename!= None:
             datafile = open(self.filename + ".pickle", "rb")
             matrixdict = pickle.load(datafile)
-        for node in self.nodelist:
-            if not (True in node.ghost_node):
-                # if we're not in the padded part of the array (not a ghost node) link to the next node in each direction
-                for i in range(len(self.shape)):
-                    these_coords = node.coordinates
-                    new_coords = np.concatenate(
-                        (these_coords[:i], [(these_coords[i] + 1)], these_coords[i + 1:]))
-                    newlink=Link(node, self[new_coords], i)
-                    if self.filename == None:
-                        newlink.set_matrix(randomSU2())
-                    else:
-                        this_matrix = matrixdict[str(these_coords) + ":" + str(i)]
-                        newlink.set_matrix(this_matrix)
+        for node in self.real_nodearray:
+            # if we're not in the padded part of the array (not a ghost node) link to the next node in each direction
+            for i in range(len(self.shape)):
+                these_coords = node.coordinates
+                new_coords = np.concatenate(
+                    (these_coords[:i], [(these_coords[i] + 1)], these_coords[i + 1:]))
+                newlink=Link(node, self[new_coords], i)
+                if self.filename == None:
+                    newlink.set_matrix(randomSU2())
+                else:
+                    this_matrix = matrixdict[str(these_coords) + ":" + str(i)]
+                    newlink.set_matrix(this_matrix)
         return
 
     def make_student_link_adjacent(self, node, direction):
@@ -147,7 +164,7 @@ class Lattice:  # ND torus lattice
     def B(self, mu, nu, node):
         position = node.coordinates
         if (position[mu] == self.shape[mu]-1) and (position[nu] == self.shape[nu]-1):
-            return np.exp(-2 * np.pi * 1j * float(self.twistmatrix[mu][nu]) / 2)
+            return np.exp(-2 * np.pi * 1j * float(self.twistmatrix[mu][nu]) / self.SUN_dimension)
         else:
             return float(1)
 
@@ -169,11 +186,10 @@ class Lattice:  # ND torus lattice
                 pass
         return 0"""
         matrixdict = {}
-        for node in self.nodelist:
-            if not (True in node.ghost_node):
-                for i in range(len(node.links)):
-                    matrix_id = str(node.coordinates) + ":" + str(i)
-                    matrixdict[matrix_id] = node.get_link(i, 0).get_matrix()
+        for node in self.real_nodearray:
+            for i in range(len(node.links)):
+                matrix_id = str(node.coordinates) + ":" + str(i)
+                matrixdict[matrix_id] = node.get_link(i, 0).get_matrix()
         with open(filename + ".pickle", "wb") as datafile:
             pickle.dump(matrixdict, datafile, protocol=pickle.HIGHEST_PROTOCOL)
 
@@ -181,10 +197,10 @@ class Lattice:  # ND torus lattice
 
     def get_plaquette_corners(self, node, plane): #with corner as bottom left point in plaquette
         cornercoords = node.coordinates
-        first_corner = cornercoords
-        second_corner = self[cornercoords].get_next_node(plane[0], 0).coordinates
-        third_corner = self[second_corner].get_next_node(plane[1], 0).coordinates
-        fourth_corner = self[third_corner].get_next_node(plane[0], 1).coordinates
+        first_corner = node
+        second_corner = first_corner.get_next_node(plane[0], 0)
+        third_corner = second_corner.get_next_node(plane[1], 0)
+        fourth_corner = third_corner.get_next_node(plane[0], 1)
         return [first_corner, second_corner, third_corner, fourth_corner]
 
     def get_plaquette_links(self, node, plane): #ordered in correct orientation
@@ -194,10 +210,10 @@ class Lattice:  # ND torus lattice
         third_corner = corners[2]
         fourth_corner = corners[3]
         linklist = [
-            self[first_corner].get_link(plane[0], 0),
-            self[second_corner].get_link(plane[1], 0),
-            self[third_corner].get_link(plane[0], 1),
-            self[fourth_corner].get_link(plane[1], 1)
+            first_corner.get_link(plane[0], 0),
+            second_corner.get_link(plane[1], 0),
+            third_corner.get_link(plane[0], 1),
+            fourth_corner.get_link(plane[1], 1)
         ]
         return linklist
 
@@ -217,7 +233,6 @@ class Lattice:  # ND torus lattice
         the cornercoords shouldn't be edges of the plane you're in. This can be enforced by making sure they're
         smaller than the size of the lattice.
         """
-        start_time = time.time()
         cornernode = self[cornercoords]
         product = np.diag([1,1])
         for matrix in self.get_plaquette_matricies(cornernode,plane):
@@ -229,14 +244,11 @@ class Lattice:  # ND torus lattice
         action_sum = 0
         loop_count = 0
         num_plaquettes = len(self.planeslist) * self.num_nodes
-        for node in self.nodelist:
-            if (not (True in node.ghost_node)):
-                #print(node.coordinates)
-                for plane in self.planeslist:
-                    loop_count +=1
-                    action_sum+= np.trace(self.B(plane[0],plane[1], node)*self.get_plaquette_holonomy(node.coordinates, plane)) #2.2 of FDW paper
-            else:
-                pass
+        for node in self.real_nodearray:
+            #print(node.coordinates)
+            for plane in self.planeslist:
+                loop_count +=1
+                action_sum+= np.trace(self.B(plane[0],plane[1], node)*self.get_plaquette_holonomy(node.coordinates, plane)) #2.2 of FDW paper
         action = 2 * num_plaquettes - action_sum
         if np.imag(action) > 0.0001:
             print("Warning: Action is Complex")
@@ -292,11 +304,10 @@ class Lattice:  # ND torus lattice
         contribution_counter = 0
         #print("Sweeping")
         for direction in range(len(self.shape)):
-            for node in self.nodelist:
-                if not (True in node.ghost_node):
-                    action_change = self.minimize_link_action(node.get_link(direction, 0))
-                    actionchanges.append(action_change)
-                    action += action_change
+            for node in self.real_nodearray:
+                action_change = self.minimize_link_action(node.get_link(direction, 0))
+                actionchanges.append(action_change)
+                action += action_change
         """
         for node in self.nodelist:
             if not (True in node.ghost_node):
@@ -329,12 +340,11 @@ class Lattice:  # ND torus lattice
         xlist= range(self.shape[plane[0]])
         ylist = range(self.shape[plane[1]])
         actionlist = np.zeros((self.shape[plane[1]], self.shape[plane[0]]))
-        for node in self.nodelist:
+        for node in self.real_nodearray:
             if (np.delete(np.delete(node.coordinates, plane[1]),plane[0]) == planecoords).all():
-                if not (True in node.ghost_node):
-                    this_location = [node.coordinates[plane[0]], node.coordinates[plane[1]]]
-                    this_action = 2 - np.trace(self.B(plane[0],plane[1], node)*self.get_plaquette_holonomy(node.coordinates, plane))
-                    actionlist[int(this_location[1])][int(this_location[0])] = np.real(this_action) #first index selects row and second selects column
+                this_location = [node.coordinates[plane[0]], node.coordinates[plane[1]]]
+                this_action = 2 - np.trace(self.B(plane[0],plane[1], node)*self.get_plaquette_holonomy(node.coordinates, plane))
+                actionlist[int(this_location[1])][int(this_location[0])] = np.real(this_action) #first index selects row and second selects column
         plt.pcolormesh(xlist, ylist, actionlist)
         titlestring = "with x"
         skipped = 0
@@ -354,8 +364,7 @@ class Lattice:  # ND torus lattice
     def get_topological_charge(self):
         runningsum = 0
         indicies = [[i,j,k,l] for i in range(3) for j in range(3) for k in range(3) for l in range(3)]
-        for node in self.nodelist:
-            if not (True in node.ghost_node):
+        for node in self.real_nodearray:
                 for index in indicies:
                     civita = LeviCivita(index[0], index[1],index[2],index[3])
                     if civita == 0:
@@ -367,6 +376,61 @@ class Lattice:  # ND torus lattice
                     runningsum += contribution
         return -1/(32 * np.pi**2) * runningsum
 
+
+    """Hybrid Monte Carlo functions. 
+    Will repeatedly use variable name "configuration" to represent a pair [link variable dict, computer momentum dict]"""
+
+
+    """def time_evolve_link(self, time, link, dt): #this should take a link and evolve it in time according to the HMC Hamiltonian for time parameter "time".
+        momentum = initial_momentum
+        momentumdt = None
+        matrix = link.get_matrix()
+        linkdt = linalg.expm(dt * momentumdt)@matrix
+        return [initial_momentum, final_momentum, initial_link, final_link]
+    """
+    def hamiltonian(self, configuration):
+        links_dict = configuration[0]
+        momentum_array = np.array(list(configuration[1].values())).reshape(self.num_nodes*self.dimensions, self.SUN_dimension, self.SUN_dimension)
+
+        #calculating action of configuration
+        node_action_contribs = 0
+        for plane in self.planeslist:
+            node_plaquette_corners = []
+            Blist = []
+            for node in self.real_nodearray:
+                node_plaquette_corners.append(self.get_plaquette_corners(node,plane))
+                Blist.append(self.B(plane[0],plane[1], node))
+            node_plaquette_corners = np.array(node_plaquette_corners).T
+            Blist = np.array(Blist)
+            first_link_matricies = np.array(
+                [links[plane[0]].get_matrix() for links in [links_dict[node] for node in node_plaquette_corners[0]]])
+            second_link_matricies = np.array(
+                [links[plane[1]].get_matrix() for links in [links_dict[node] for node in node_plaquette_corners[1]]])
+            third_link_matricies = np.array(
+                [links[plane[0]].get_matrix().conj().T for links in [links_dict[node] for node in node_plaquette_corners[3]]])
+            fourth_link_matricies = np.array(
+                [links[plane[1]].get_matrix().conj().T for links in
+                 [links_dict[node] for node in node_plaquette_corners[0]]])
+            plane_holonomies = Blist[:, np.newaxis, np.newaxis] *  ((first_link_matricies @ second_link_matricies @ third_link_matricies @ fourth_link_matricies))
+            node_action_contribs += np.sum(np.trace(plane_holonomies, axis1 = 1, axis2 = 2))
+        action = 2 * len(self.planeslist) * self.num_nodes - node_action_contribs
+
+        #calculating fictuous momentum contribution
+        momentum_contrib = np.trace(np.sum(momentum_array@momentum_array, axis = 0))
+
+        #returning Hamiltonian value
+        hamiltonian = momentum_contrib + action
+        return hamiltonian
+
+
+
+    def accept_config(self, configuration):
+        final_momentum = configuration[1]
+        initial_momentum = configuration[0]
+
+        Hamiltonian = np.sum(np.trace(final_momentum@final_momentum))
+    def chain(self):
+        new_config_dict = self.link_dict.copy()
 
 
 
