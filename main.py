@@ -1,3 +1,4 @@
+import lattice
 from lattice import Lattice
 from lattice import randomSU2
 import matplotlib.pyplot as plt
@@ -14,24 +15,34 @@ twistmatrix = [[0,0,0,1],[0,0,1,0],[0,-1,0,0],[-1,0,0,0]]
 
 myLattice = Lattice([24,6,6,24], twistmatrix = twistmatrix)
 
+newlinkdict = {}
+zeromomentumdict = {}
+for node in myLattice.real_nodearray:
+    linkholder = []
+    momentumholder = []
+    for i in range(myLattice.dimensions):
+        linkholder.append(randomSU2())
+        momentumholder.append(np.array([[0,0],[0,0]]))
+    newlinkdict[node] = linkholder
+    zeromomentumdict[node]= momentumholder
+
+for node in myLattice.ghost_nodearray:
+    linkholder = []
+    momentumholder = []
+    for i in range(myLattice.dimensions):
+        if not node.ghost_node[i]:
+            linkholder.append(newlinkdict[node.get_link(i, 0).parent_link.node1][i]) #I've already done the math about which links should be identified
+            momentumholder.append(np.array([[0,0],[0,0]]))
+        else:
+            linkholder.append(np.array([[None,None],[None,None]])) #none array should never be involved in any calculation but should crash if it somehow is.
+            momentumholder.append(np.array([[0, 0], [0, 0]]))
+    newlinkdict[node] = linkholder
+    zeromomentumdict[node] = momentumholder
+
+
+print(np.shape(np.array(list(zeromomentumdict.values()))))
+
+
 starttime = time.time()
-y=myLattice.get_action()
-print(y)
-print("normal action time:", time.time()-starttime)
-
-"""for plane in myLattice.planeslist:
-    if plane == [0,1]:
-        print("plane:", plane, " ", myLattice.get_plaquette_holonomy(myLattice.real_nodearray[12].coordinates, plane))
-
-"""
-starttime = time.time()
-x=myLattice.hamiltonian(myLattice.link_dict)
-print(x)
-print("hamiltonian action time:", time.time()-starttime)
-
-
-print("per-node difference: ", np.abs(x-y)/len(myLattice.real_nodearray))
-"""
-
-myLattice.action_min_sweep(10000) #total runs: 20000
-myLattice.save_links("twistedmin")"""
+myLattice.accept_config([newlinkdict,zeromomentumdict],[myLattice.get_link_matrix_dict(), zeromomentumdict])
+print("elapsed:", time.time()-starttime)

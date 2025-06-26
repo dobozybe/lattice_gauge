@@ -58,6 +58,7 @@ class Lattice:  # ND torus lattice
         self.dimensions = len(shape)
         self.nodelist = []
         self.real_nodearray = [] #np array of nodes that aren't ghost nodes
+        self.ghost_nodearray = []
         tuplelist = []
         self.make_tuples(np.zeros(len(shape)), self.paddedshape, tuplelist)
 
@@ -69,7 +70,10 @@ class Lattice:  # ND torus lattice
         for node in self.nodelist: #initialize real node array
             if not True in node.ghost_node:
                 self.real_nodearray.append(node)
+            else:
+                self.ghost_nodearray.append(node)
         self.real_nodearray = np.array(self.real_nodearray)
+        self.ghost_nodearray = np.array(self.ghost_nodearray)
 
 
         for i in range(self.dimensions): #initialize planeslist
@@ -194,7 +198,18 @@ class Lattice:  # ND torus lattice
             pickle.dump(matrixdict, datafile, protocol=pickle.HIGHEST_PROTOCOL)
 
 
-
+    def get_link_matrix_dict(self):
+        matrix_dict = {}
+        for node in self.link_dict:
+            matrixholder = []
+            for i in range(self.dimensions):
+                thislink = node.get_link(i, 0)
+                if thislink!= None:
+                    matrixholder.append(thislink.get_matrix())
+                else:
+                    matrixholder.append(np.array([[None,None],[None,None]]))
+            matrix_dict[node]=matrixholder
+        return matrix_dict
     def get_plaquette_corners(self, node, plane): #with corner as bottom left point in plaquette
         cornercoords = node.coordinates
         first_corner = node
@@ -378,7 +393,10 @@ class Lattice:  # ND torus lattice
 
 
     """Hybrid Monte Carlo functions. 
-    Will repeatedly use variable name "configuration" to represent a pair [link variable dict, computer momentum dict]"""
+    Will repeatedly use variable name "configuration" to represent a pair
+     [link variable matrix dict, computer momentum dict]. It's important that the first entry
+     is link variable matricies, and not the link variable objects themselves so we don't reset them
+     during time evolution"""
 
 
     """def time_evolve_link(self, time, link, dt): #this should take a link and evolve it in time according to the HMC Hamiltonian for time parameter "time".
@@ -389,8 +407,10 @@ class Lattice:  # ND torus lattice
         return [initial_momentum, final_momentum, initial_link, final_link]
     """
     def hamiltonian(self, configuration):
-        links_dict = configuration[0]
-        momentum_array = np.array(list(configuration[1].values())).reshape(self.num_nodes*self.dimensions, self.SUN_dimension, self.SUN_dimension)
+        starttime = time.time()
+        link_matricies_dict = configuration[0]
+        momentum_dict = configuration[1]
+        momentum_array = np.array(list(momentum_dict.values())).reshape(len(self.nodelist)*self.dimensions, self.SUN_dimension, self.SUN_dimension)
 
         #calculating action of configuration
         node_action_contribs = 0
@@ -403,14 +423,14 @@ class Lattice:  # ND torus lattice
             node_plaquette_corners = np.array(node_plaquette_corners).T
             Blist = np.array(Blist)
             first_link_matricies = np.array(
-                [links[plane[0]].get_matrix() for links in [links_dict[node] for node in node_plaquette_corners[0]]])
+                [link_matricies[plane[0]] for link_matricies in [link_matricies_dict[node] for node in node_plaquette_corners[0]]])
             second_link_matricies = np.array(
-                [links[plane[1]].get_matrix() for links in [links_dict[node] for node in node_plaquette_corners[1]]])
+                [link_matricies[plane[1]] for link_matricies in [link_matricies_dict[node] for node in node_plaquette_corners[1]]])
             third_link_matricies = np.array(
-                [links[plane[0]].get_matrix().conj().T for links in [links_dict[node] for node in node_plaquette_corners[3]]])
+                [link_matricies[plane[0]].conj().T for link_matricies in [link_matricies_dict[node] for node in node_plaquette_corners[3]]])
             fourth_link_matricies = np.array(
-                [links[plane[1]].get_matrix().conj().T for links in
-                 [links_dict[node] for node in node_plaquette_corners[0]]])
+                [link_matricies[plane[1]].conj().T for link_matricies in
+                 [link_matricies_dict[node] for node in node_plaquette_corners[0]]])
             plane_holonomies = Blist[:, np.newaxis, np.newaxis] *  ((first_link_matricies @ second_link_matricies @ third_link_matricies @ fourth_link_matricies))
             node_action_contribs += np.sum(np.trace(plane_holonomies, axis1 = 1, axis2 = 2))
         action = 2 * len(self.planeslist) * self.num_nodes - node_action_contribs
@@ -420,15 +440,29 @@ class Lattice:  # ND torus lattice
 
         #returning Hamiltonian value
         hamiltonian = momentum_contrib + action
-        return hamiltonian
+        print("elapsed:", time.time()-starttime)
+        return np.real(hamiltonian)
 
 
 
-    def accept_config(self, configuration):
-        final_momentum = configuration[1]
-        initial_momentum = configuration[0]
+    def accept_config(self, new_configuration, initial_configuration):
+        starttime = time.time()
+        Hinitial = self.hamiltonian(initial_configuration)
+        Hnew = self.hamiltonian(new_configuration)
+        difference = Hnew - Hinitial
+        transition_prob = np.minimum(1, np.exp(-difference))
+        randomvar = random.uniform(0,1)
+        if randomvar < transition_prob:
+            new_matrix_dict = dict(zip(self.link_dict.keys(), new_configuration[0].values()))
+            for node in self.real_nodearray:
+                for direction in self.dimensions:
+                    self.link_dict[node][direction].set_matrix(new_matrix_dict[node]) ##todo: make sure update working
+            return "updated"
+        else:
+            return "not updated"
+        print("overall elapsed:", time.time()-starttime)
 
-        Hamiltonian = np.sum(np.trace(final_momentum@final_momentum))
+
     def chain(self):
         new_config_dict = self.link_dict.copy()
 
