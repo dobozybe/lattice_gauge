@@ -1,3 +1,5 @@
+import functools
+
 import numpy as np
 from node_links import *
 import random
@@ -198,9 +200,9 @@ class Lattice:  # ND torus lattice
             pickle.dump(matrixdict, datafile, protocol=pickle.HIGHEST_PROTOCOL)
 
 
-    def get_link_matrix_dict(self):
+    def get_link_matrix_dict(self): #returns only non-ghost link matricies
         matrix_dict = {}
-        for node in self.link_dict:
+        for node in self.real_nodearray:
             matrixholder = []
             for i in range(self.dimensions):
                 thislink = node.get_link(i, 0)
@@ -396,17 +398,123 @@ class Lattice:  # ND torus lattice
     Will repeatedly use variable name "configuration" to represent a pair
      [link variable matrix dict, computer momentum dict]. It's important that the first entry
      is link variable matricies, and not the link variable objects themselves so we don't reset them
-     during time evolution"""
+     during time evolution. Dictionaries must range over ***all*** nodes, including ghost. But code will
+     only update non-ghost node values and will set ghost node values accordingly."""
+    def ghost_fill_configuration(self,configuration):
+        link_dict = configuration[0]
+        momentum_dict = configuration[1]
+        filled_link_dict = link_dict.copy()
+        filled_momentum_dict = momentum_dict.copy()
+        for node in self.ghost_nodearray:
+            linkholder = []
+            momentumholder = []
+            for i in range(self.dimensions):
+                if not node.ghost_node[i]:
+                    linkholder.append(link_dict[node.get_link(i, 0).parent_link.node1][
+                                          i])  # I've already done the math about which links should be identified
+                    momentumholder.append(momentum_dict[node.get_link(i, 0).parent_link.node1][
+                                          i])
+                else:
+                    linkholder.append(np.array([[None, None], [None,
+                                                               None]]))  # none array should never be involved in any calculation but should crash if it somehow is.
+                    momentumholder.append(np.array([[None, None], [None,
+                                                               None]]))
+            filled_link_dict[node] = linkholder
+            filled_momentum_dict[node] = momentumholder
+        new_config = [filled_link_dict, filled_momentum_dict]
+        return new_config
+    def random_momentum(self):
+        new_momentum_dict = {}
+        lie_gens =[
+            np.array([[0,-1],[-1,0]]),
+            np.array([[0,-1j],[1j,0]]),
+            np.array([[-1,0],[0,-1]])
+        ]
+        for node in self.real_nodearray:
+            momenta_list = []
+            for direction in range(self.dimensions):
+                momenta_vals = [np.random.normal(),np.random.normal(),np.random.normal()]
+                momenta_list.append(momenta_vals[0] * lie_gens[0] + momenta_vals[1] * lie_gens[1]+momenta_vals[2] * lie_gens[2])
+            new_momentum_dict[node]= momenta_list
+        return new_momentum_dict
+    def project(self, matrixarray):
+        antisym=(matrixarray - np.transpose(matrixarray.conj(), axes = [0,2,1]))
+        return (1/2) * antisym - (1/4)* np.trace(antisym) @ np.array([[1,0],[0,1]])
+
+    def link_update(self, initial_config, dt): #sends link at n * dt to (n+1)*dt
+        starttime = time.time()
+        link_array = np.transpose(np.array(list(initial_config[0].values())), axes = [1,0,2,3])
+        newlinks = []
+        momentum_array = np.transpose(np.array(list(initial_config[1].values())), axes = [1,0,2,3])
+        for direction in range(len(momentum_array)):
+            link_array = scipy.linalg.expm(dt * momentum_array[direction]) @ link_array[direction]
+            newlinks.append(link_array)
+        newlinks = np.transpose(np.array(newlinks), axes = [1,0,2,3])
+        new_link_dict = dict(zip(initial_config[0].keys(), list(newlinks)))
+        new_config = [new_link_dict, initial_config[1]]
+        print("link elapsed", time.time()-starttime)
+        return new_config
+
+    def momentum_update(self, initial_config, dt): #sends momentum at n*dt - dt/2 to n * dt + dt/2
+        starttime = time.time()
+        momentum_array = np.transpose(np.array(list(initial_config[1].values())), axes = [1,0,2,3])
+        filled_config = self.ghost_fill_configuration(initial_config)
+        filled_link_matricies_dict = filled_config[0]
+        for direction in range(len(momentum_array)):
+            plane_holonomies_sum = 0
+            for plane in self.planeslist:
+                if direction in plane:
+                    node_plaquette_corners = []
+                    Blist = []
+                    starttime = time.time()
+                    for node in self.real_nodearray:
+                        node_plaquette_corners.append(self.get_plaquette_corners(node, plane))
+                        Blist.append(self.B(plane[0], plane[1], node))
+                    print("looptime", time.time()-starttime)
+                    starttime = time.time()
+                    node_plaquette_corners = np.array(node_plaquette_corners).T
+                    Blist = np.array(Blist)
+                    links0 = [filled_link_matricies_dict[node] for node in node_plaquette_corners[0]]
+                    first_link_matricies = np.stack(
+                        [link_matricies[plane[0]] for link_matricies in links0])
+                    second_link_matricies = np.stack(
+                        [link_matricies[plane[1]] for link_matricies in
+                         [filled_link_matricies_dict[node] for node in node_plaquette_corners[1]]])
+                    third_link_matricies = np.transpose(np.stack(
+                        [link_matricies[plane[0]] for link_matricies in
+                         [filled_link_matricies_dict[node] for node in node_plaquette_corners[3]]]), axes = [0,2,1])
+                    fourth_link_matricies = np.transpose(np.stack(
+                        [link_matricies[plane[1]] for link_matricies in links0]).conj(), axes = [0,2,1])
+                    matricies = [first_link_matricies, second_link_matricies, third_link_matricies, fourth_link_matricies]
+                    holonomies = functools.reduce(np.matmul, matricies)
+                    plane_holonomies_sum += Blist[:, np.newaxis, np.newaxis] * holonomies
+                    print("holonomyytime", time.time()-starttime)
+            momentum_array[direction] -= 1/2 * dt * self.project(plane_holonomies_sum)
+        new_momentum_dict = dict(zip(initial_config[0].keys(), list(np.transpose(np.array(momentum_array), axes = [1,0,2,3]))))
+        new_config = [initial_config[0], new_momentum_dict]
+        print("elapsed", time.time()-starttime)
+        return new_config
+    def evolution_step(self, config, dt):
+        momentum_config = self.momentum_update(config, dt)
+        link_config = self.link_update(momentum_config, dt)
+        return link_config
+
+    def time_evolve(self, initial_config, evolution_time,nsteps = 1000):
+        starttime = time.time()
+        config = initial_config
+        dt = evolution_time/nsteps
+        for i in range(nsteps):
+            print(i)
+            config = self.evolution_step(config, dt)
+        print("Elapsed:", time.time()-starttime)
+        return config
 
 
-    """def time_evolve_link(self, time, link, dt): #this should take a link and evolve it in time according to the HMC Hamiltonian for time parameter "time".
-        momentum = initial_momentum
-        momentumdt = None
-        matrix = link.get_matrix()
-        linkdt = linalg.expm(dt * momentumdt)@matrix
-        return [initial_momentum, final_momentum, initial_link, final_link]
-    """
-    def hamiltonian(self, configuration):
+    def generate_candidate_configuration(self, current_configuration, evol_time):
+        new_configuration = self.time_evolve(current_configuration, evol_time)
+        return new_configuration
+
+    def hamiltonian(self, configuration): #only takes a ghost filled configuration
         starttime = time.time()
         link_matricies_dict = configuration[0]
         momentum_dict = configuration[1]
@@ -414,7 +522,7 @@ class Lattice:  # ND torus lattice
 
         #calculating action of configuration
         node_action_contribs = 0
-        for plane in self.planeslist:
+        for plane in self.planeslist: #generate all plaquette holonomies
             node_plaquette_corners = []
             Blist = []
             for node in self.real_nodearray:
@@ -431,6 +539,8 @@ class Lattice:  # ND torus lattice
             fourth_link_matricies = np.array(
                 [link_matricies[plane[1]].conj().T for link_matricies in
                  [link_matricies_dict[node] for node in node_plaquette_corners[0]]])
+            #plane_holonomies: gives array of each matrix corresponding to the holonomy around a plaquette
+            #in list corresponding to posiiton of corner node in self.real_nodearray
             plane_holonomies = Blist[:, np.newaxis, np.newaxis] *  ((first_link_matricies @ second_link_matricies @ third_link_matricies @ fourth_link_matricies))
             node_action_contribs += np.sum(np.trace(plane_holonomies, axis1 = 1, axis2 = 2))
         action = 2 * len(self.planeslist) * self.num_nodes - node_action_contribs
@@ -447,24 +557,37 @@ class Lattice:  # ND torus lattice
 
     def accept_config(self, new_configuration, initial_configuration):
         starttime = time.time()
+        new_configuration = self.ghost_fill_configuration(new_configuration)
         Hinitial = self.hamiltonian(initial_configuration)
         Hnew = self.hamiltonian(new_configuration)
         difference = Hnew - Hinitial
         transition_prob = np.minimum(1, np.exp(-difference))
         randomvar = random.uniform(0,1)
+        print("Hnew: ", Hnew, " Hinitial: ",Hinitial)
         if randomvar < transition_prob:
             new_matrix_dict = dict(zip(self.link_dict.keys(), new_configuration[0].values()))
             for node in self.real_nodearray:
-                for direction in self.dimensions:
-                    self.link_dict[node][direction].set_matrix(new_matrix_dict[node]) ##todo: make sure update working
-            return "updated"
+                for direction in range(self.dimensions):
+                    self.link_dict[node][direction].set_matrix(new_matrix_dict[node][direction])
+            print("overall elapsed:", time.time() - starttime)
+            return True
         else:
-            return "not updated"
-        print("overall elapsed:", time.time()-starttime)
+            print("overall elapsed:", time.time() - starttime)
+            return False
 
 
-    def chain(self):
-        new_config_dict = self.link_dict.copy()
+    def chain(self, number_iterations):
+        momentum =self.random_momentum()
+        for i in range(number_iterations):
+            print(i)
+            old_config = [self.get_link_matrix_dict(), momentum]
+            candidate = self.generate_candidate_configuration(old_config, 5)
+            if self.accept_config(old_config, candidate):
+                momentum = candidate[1]
+            else:
+                continue
+        return
+
 
 
 
