@@ -1,5 +1,5 @@
 import lattice
-from lattice import Lattice
+from lattice import *
 from lattice import randomSU2
 import matplotlib.pyplot as plt
 import numpy as np
@@ -15,11 +15,26 @@ twistmatrix = [[0,0,0,1],[0,0,1,0],[0,-1,0,0],[-1,0,0,0]]
 
 myLattice = Lattice([24,6,6,24], twistmatrix = twistmatrix)
 
-print(np.shape(np.array(list(myLattice.get_link_matrix_dict().values()))))
 links = myLattice.get_link_matrix_dict()
 momen = myLattice.random_momentum()
 config = [links, momen]
-myLattice.momentum_update(config, 0.001)
+
+"""def random_complex_matrix():
+    real_part = np.random.randn(2, 2)
+    imag_part = np.random.randn(2, 2)
+    return real_part + 1j * imag_part
+
+w = random_complex_matrix()
+x = random_complex_matrix()
+y = random_complex_matrix()
+z = random_complex_matrix()
+
+matrixarray = np.array([[x,y],[w,z]])
+
+print(project(matrixarray))"""
+
+myLattice.chain(5)
+#myLattice.prealloc_momentum_update(config, 0.001)
 #cProfile.runctx("myLattice.momentum_update(config, 0.001)", globals(), locals())
 """config = myLattice.time_evolve([myLattice.get_link_matrix_dict(), myLattice.random_momentum()], 3)
 
