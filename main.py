@@ -6,78 +6,62 @@ import numpy as np
 import copy
 import sys
 import cProfile
+import pickle
 import time
-
 
 
 
 twistmatrix = [[0,0,0,1],[0,0,1,0],[0,-1,0,0],[-1,0,0,0]]
 
-myLattice = Lattice([24,6,6,24], twistmatrix = twistmatrix)
+myLattice = Lattice([3,3,3,3], twistmatrix = twistmatrix) #24,6,6,24
 
-links = myLattice.get_link_matrix_dict()
-momen = myLattice.random_momentum()
-config = [links, momen]
-
-"""def random_complex_matrix():
-    real_part = np.random.randn(2, 2)
-    imag_part = np.random.randn(2, 2)
-    return real_part + 1j * imag_part
-
-w = random_complex_matrix()
-x = random_complex_matrix()
-y = random_complex_matrix()
-z = random_complex_matrix()
-
-matrixarray = np.array([[x,y],[w,z]])
-
-print(project(matrixarray))"""
-
-myLattice.chain(5)
-#myLattice.prealloc_momentum_update(config, 0.001)
-#cProfile.runctx("myLattice.momentum_update(config, 0.001)", globals(), locals())
-"""config = myLattice.time_evolve([myLattice.get_link_matrix_dict(), myLattice.random_momentum()], 3)
-
-link_matrix_dict = config[0]
-momentum_matrix_dict = config[1]
-
-print(momentum_matrix_dict[myLattice[0,1,0,2]])"""
-
-"""while True:
-    newlinkdict = {}
-    zeromomentumdict = {}
-    for node in myLattice.real_nodearray:
-        linkholder = []
-        momentumholder = []
-        for i in range(myLattice.dimensions):
-            linkholder.append(randomSU2())
-            momentumholder.append(np.array([[0,0],[0,0]]))
-        newlinkdict[node] = linkholder
-        zeromomentumdict[node]= momentumholder
-
-    for node in myLattice.ghost_nodearray:
-        linkholder = []
-        momentumholder = []
-        for i in range(myLattice.dimensions):
-            if not node.ghost_node[i]:
-                linkholder.append(newlinkdict[node.get_link(i, 0).parent_link.node1][i]) #I've already done the math about which links should be identified
-                momentumholder.append(np.array([[0,0],[0,0]]))
-            else:
-                linkholder.append(np.array([[None,None],[None,None]])) #none array should never be involved in any calculation but should crash if it somehow is.
-                momentumholder.append(np.array([[0, 0], [0, 0]]))
-        newlinkdict[node] = linkholder
-        zeromomentumdict[node] = momentumholder
+#myLattice = Lattice([2,2])
 
 
-    print(myLattice[0,0,0,0].get_link(1,0).get_matrix())
-    print(myLattice[24,0,0,0].get_link(1,0).get_matrix())
+"""for node in myLattice.real_nodearray:
+    for link in node.links:
+        thislink = link[0]
+        for direction in range(myLattice.dimensions):
+            thislink.set_matrix(np.array([[1,0],[0,1]], dtype = np.complex128))
 
+print(myLattice.get_action())
+
+config = [myLattice.get_link_matrix_dict(), myLattice.random_momentum()]
+
+print(myLattice.get_config_action(config))"""
+
+#x = myLattice.chain(1, 5, 50)
+
+
+
+
+#Energy is conserved when: initial momentum is 0, or if we're on such a trajectory.
+def Newchain(number_iterations, evolution_time, number_steps):
     starttime = time.time()
-    x = myLattice.accept_config([newlinkdict,zeromomentumdict],[myLattice.get_link_matrix_dict(), zeromomentumdict])
-    print("elapsed:", time.time()-starttime)
-    if x == True:
-        print(myLattice[0,0,0,0].get_link(1,0).get_matrix())
-        print(myLattice[24,0,0,0].get_link(1,0).get_matrix())
-        break
-    else:
-        continue"""
+    with open("savedmomentum.pkl", "rb") as f:
+        momentum = pickle.load(f)
+    momentumvals = list(momentum.values())
+
+    momentumvals = project(np.full(np.shape(np.array(list(momentum.values()))), 0j, dtype='complex128')) #action 175 momentum 85 issue issue
+    # momentum = dict(zip(momentum.keys(),momentumvals))
+    keys = list(myLattice.get_link_matrix_dict().keys())
+    momentum = dict(zip(keys, momentumvals))
+    acceptances = 0
+    old_config = [myLattice.get_link_matrix_dict(), momentum]
+    for i in range(number_iterations):
+        candidate = myLattice.generate_candidate_configuration(old_config, evolution_time, number_steps)
+        if myLattice.accept_config(candidate, old_config):
+            print("accepted")
+            acceptances += 1
+        momentum = myLattice.random_momentum()
+    print("Avg time per config: ", (time.time() - starttime) / number_iterations)
+    print("acceptance rate:", acceptances / number_iterations)
+    return candidate
+
+
+x = myLattice.chain(1, 5, 800)
+#y = Newchain(1, 5, 100)
+
+
+
+plt.show()

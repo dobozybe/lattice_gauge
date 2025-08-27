@@ -11,25 +11,33 @@ from sympy import LeviCivita
 import scipy.stats
 import scipy.linalg as linalg
 
+##todo: Note to self: check that you're not using convention-dependent formulas! Rubakov assumes a Tr[t^a t^b] = 1/2 \delta normalization and some of the HMC papers may as well. Don't mess that up. 
 
+hamiltonian_list = []
+action_list = []
+momentum_list = []
+momentum_change_list=[]
+action_change_list=[]
+
+global gork
 def get_identity():
     return np.diag(np.full(2, 1))
 
 
-lie_gens = np.stack([
-    np.array([[0, -1], [1, 0]]),
+lie_gens = np.stack([ #i sigma_n where sigma_i are the paulis.
+    np.array([[0, 1], [-1, 0]]),
     np.array([[0, 1j], [1j, 0]]),
     np.array([[1j, 0], [0, -1j]])
 ])
 
 
 def su2_exp(matrixarray):
-    param1 = np.trace(matrixarray @ lie_gens[0], axis1=1, axis2=2)
-    param2 = np.trace(matrixarray @ lie_gens[1], axis1=1, axis2=2)
-    param3 = np.trace(matrixarray @ lie_gens[2], axis1=1, axis2=2)
+    param1 = np.trace(matrixarray @ lie_gens[0].conj().T, axis1=1, axis2=2)/2
+    param2 = np.trace(matrixarray @ lie_gens[1].conj().T, axis1=1, axis2=2)/2
+    param3 = np.trace(matrixarray @ lie_gens[2].conj().T, axis1=1, axis2=2)/2
     paramarray = np.stack([param1, param2, param3]).T
     normparams = np.sqrt(param1 ** 2 + param2 ** 2 + param3 ** 2)
-    if np.max(np.imag(normparams)) > 0:
+    if np.max(np.imag(normparams)) > 0.0001:
         print("error! Normparams in su2_exp is imaginary!", np.max(np.imag(normparams)))
         return None
     normparams = np.float64(normparams)
@@ -40,6 +48,25 @@ def su2_exp(matrixarray):
         "ij, jkl->ikl", normed_paramarray, lie_gens
     ) * np.sin(modded_normparams)[:, np.newaxis, np.newaxis]
     return exp
+
+
+def random_su2_matrix():
+    # Random real numbers for the basis coefficients
+    a1, a2, a3 = np.random.randn(3)
+
+    # su(2) basis using Pauli matrices (times i)
+    sigma1 = np.array([[0, 1], [1, 0]], dtype=complex)
+    sigma2 = np.array([[0, -1j], [1j, 0]], dtype=complex)
+    sigma3 = np.array([[1, 0], [0, -1]], dtype=complex)
+
+    # Linear combination: X = i(a1 * σ1 + a2 * σ2 + a3 * σ3)
+    su2_matrix = 1j * (a1 * sigma1 + a2 * sigma2 + a3 * sigma3)
+    return su2_matrix
+
+
+x = np.array([random_su2_matrix()])
+
+
 
 
 def randomSU2():
@@ -54,8 +81,9 @@ def randomSU2():
 
 def inSU2(matrix):
     determinant1 = (np.round(np.linalg.det(matrix), 10) == np.float64(1))
-    unitary = np.array_equal(np.round(matrix @ matrix.conj().T, 10), np.diag(np.full(2, 1)))
+    unitary = np.array_equal(np.round(matrix @ np.transpose(matrix.conj(), axes=(0,2,1)), 10), np.diag(np.full(2, 1, dtype = complex)))
     return determinant1 and unitary
+
 
 def project(matrixarray):
     antisym = (matrixarray - np.transpose(matrixarray.conj(), axes=(*range(matrixarray.ndim - 2), -1, -2)))
@@ -68,7 +96,9 @@ class Lattice:  # ND torus lattice
         self.SUN_dimension = 2
         self.shape = shape
         self.filename = filename
+
         self.plaquette_corner_dict = {}
+        self.v_second_plaquette_corner_dict = {}
         self.twistmatrix = np.zeros((len(shape), len(shape)))
         if twistmatrix != None:
             self.twistmatrix = twistmatrix
@@ -77,6 +107,7 @@ class Lattice:  # ND torus lattice
 
         self.indexdict = {}
         self.Bdict = {}
+        self.V2_Bdict = {}
         self.link_dict = {}
 
         self.num_nodes = 1  # not including ghosts
@@ -117,10 +148,21 @@ class Lattice:  # ND torus lattice
         for node in self.nodelist:
             self.link_dict[node] = np.array(node.links).T[0]
 
-        for node in self.real_nodearray:
+        """for node in self.real_nodearray:
             for plane in self.planeslist:
                 self.plaquette_corner_dict[(node, plane)] = self.get_plaquette_corners(node, plane)
-                self.Bdict[(node, plane)] = self.B(plane[0], plane[1], node)
+                self.Bdict[(node, plane)] = self.B(plane[0], plane[1], node)"""
+
+        for node in self.real_nodearray:
+            for mu in range(self.dimensions):
+                for nu in range(self.dimensions):
+                    if nu != mu:
+                        plane = (mu,nu)
+                        self.plaquette_corner_dict[(node, plane)] = self.get_plaquette_corners(node, plane)
+                        self.v_second_plaquette_corner_dict[(node,plane)] = self.v2_second_plaquette_corners(node, plane)
+                        self.Bdict[(node, plane)] = self.B(plane[0], plane[1], node)
+                        self.V2_Bdict[(node, plane)] = self.B(plane[0], plane[1], self.translate(node, plane[1], -1))
+
         print("Initialized in:", time.time() - starttime)
 
     def get_node_index(self, coordinates):
@@ -253,6 +295,13 @@ class Lattice:  # ND torus lattice
         fourth_corner = third_corner.get_next_node(plane[0], 1)
         return [first_corner, second_corner, third_corner, fourth_corner]
 
+    def v2_second_plaquette_corners(self, node, plane):  # with corner as bottom left point in plaquette
+        first_corner = node
+        second_corner = self.translate(first_corner, plane[0], 1)
+        third_corner = self.translate(second_corner, plane[1], -1)
+        fourth_corner = self.translate(third_corner, plane[0], -1)
+        return [first_corner, second_corner, third_corner, fourth_corner]
+
     def get_plaquette_links(self, node, plane):  # ordered in correct orientation
         corners = self.get_plaquette_corners(node, plane)
         first_corner = corners[0]
@@ -299,7 +348,7 @@ class Lattice:  # ND torus lattice
                 loop_count += 1
                 action_sum += np.trace(self.B(plane[0], plane[1], node) * self.get_plaquette_holonomy(node.coordinates,
                                                                                                       plane))  # 2.2 of FDW paper
-        action = 2 * num_plaquettes - action_sum
+        action = num_plaquettes - action_sum
         if np.imag(action) > 0.0001:
             print("Warning: Action is Complex")
             return action
@@ -445,8 +494,8 @@ class Lattice:  # ND torus lattice
     Will repeatedly use variable name "configuration" to represent a pair
      [link variable matrix dict, computer momentum dict]. It's important that the first entry
      is link variable matricies, and not the link variable objects themselves so we don't reset them
-     during time evolution. Dictionaries must range over ***all*** nodes, including ghost. But code will
-     only update non-ghost node values and will set ghost node values accordingly."""
+     during time evolution. Dicts are formatted as dict[node] = [list of matricies indexed by direction] Dictionaries only contain real nodes, there's a method to ghost fill dictionaries when
+     necessary."""
 
     def ghost_fill_configuration(self, configuration):
         link_dict = configuration[0]
@@ -478,7 +527,7 @@ class Lattice:  # ND torus lattice
         for node in self.real_nodearray:
             momenta_list = []
             for direction in range(self.dimensions):
-                momenta_vals = [np.random.normal(), np.random.normal(), np.random.normal()]
+                momenta_vals = np.array([np.random.normal(scale = 1/np.sqrt(2)), np.random.normal(scale = 1/np.sqrt(2)), np.random.normal(scale = 1/np.sqrt(2))])
                 matrix = momenta_vals[0] * lie_gens[0] + momenta_vals[1] * lie_gens[1] + momenta_vals[2] * lie_gens[2]
                 momenta_list.append(
                     momenta_vals[0] * lie_gens[0] + momenta_vals[1] * lie_gens[1] + momenta_vals[2] * lie_gens[2])
@@ -493,10 +542,11 @@ class Lattice:  # ND torus lattice
         link_array = np.transpose(np.array(list(initial_config[0].values())), axes=[1, 0, 2, 3])
         newlinks = []
         momentum_array = np.transpose(np.array(list(initial_config[1].values())), axes=[1, 0, 2, 3])
-        for direction in range(len(momentum_array)):
+        for direction in range(self.dimensions):
             new_link_array = su2_exp(dt * momentum_array[direction]) @ link_array[direction]
             newlinks.append(new_link_array)
         newlinks = np.transpose(np.array(newlinks), axes=[1, 0, 2, 3])
+
         new_link_dict = dict(zip(initial_config[0].keys(), list(newlinks)))
         new_config = [new_link_dict, initial_config[1]]
         return new_config
@@ -504,69 +554,235 @@ class Lattice:  # ND torus lattice
 
     def momentum_update(self, initial_config, dt):  # sends momentum at n*dt - dt/2 to n * dt + dt/2
         momentum_array = np.transpose(np.array(list(initial_config[1].values())), axes=[1, 0, 2,
-                                                                                        3])  # array with dimensions [direction, node, matrix]
+                                                                                       3])  # array with dimensions [direction, node, matrix]
+        momentum_dict = initial_config[1].copy()
+        link_dict = initial_config[0]
+        link_array = np.transpose(np.array(list(initial_config[0].values())), axes=[1,0,3,2])
         filled_config = self.ghost_fill_configuration(initial_config)
+
         filled_link_matricies_dict = filled_config[0]
-        first_link_matricies = np.empty((self.dimensions, self.dimensions-1, len(self.real_nodearray), 2,2), dtype = complex)
-        second_link_matricies = np.empty((self.dimensions, self.dimensions-1, len(self.real_nodearray), 2, 2),
+
+
+        #link matricies dicts have indicies [direction, plane, node, matrix]
+        """first_link_matricies = np.empty((self.dimensions, (self.dimensions-1), len(self.real_nodearray), 2,2), dtype = complex)
+        second_link_matricies = np.empty((self.dimensions, (self.dimensions-1), len(self.real_nodearray), 2, 2),
                                         dtype=complex)
-        third_link_matricies = np.empty((self.dimensions, self.dimensions-1, len(self.real_nodearray), 2, 2),
+        third_link_matricies = np.empty((self.dimensions, (self.dimensions-1), len(self.real_nodearray), 2, 2),
                                         dtype=complex)
-        fourth_link_matricies = np.empty((self.dimensions, self.dimensions-1, len(self.real_nodearray), 2, 2),
+        fourth_link_matricies = np.empty((self.dimensions, (self.dimensions-1), len(self.real_nodearray), 2, 2),
                                         dtype=complex)
+        v2_first_link_matricies = np.empty((self.dimensions, (self.dimensions-1), len(self.real_nodearray), 2, 2),
+                                        dtype=complex)
+        v2_second_link_matricies = np.empty((self.dimensions, (self.dimensions-1), len(self.real_nodearray), 2, 2),
+                                         dtype=complex)
+        v2_third_link_matricies = np.empty((self.dimensions, (self.dimensions-1), len(self.real_nodearray), 2, 2),
+                                        dtype=complex)
+        v2_fourth_link_matricies = np.empty((self.dimensions, (self.dimensions-1), len(self.real_nodearray), 2, 2),
+                                         dtype=complex)
         for direction in range(self.dimensions):
-            for planeindex, plane in enumerate([planeval for planeval in self.planeslist if direction in planeval]):
-                    for nodeindex, node in enumerate(self.real_nodearray):
-                        first_link_matricies[direction, planeindex, nodeindex] = filled_link_matricies_dict[self.plaquette_corner_dict[(node, plane)][0]][plane[0]]
-                        second_link_matricies[direction, planeindex, nodeindex] = filled_link_matricies_dict[self.plaquette_corner_dict[(node, plane)][1]][plane[1]]
-                        third_link_matricies[direction, planeindex, nodeindex] = filled_link_matricies_dict[self.plaquette_corner_dict[(node, plane)][3]][plane[0]]
-                        fourth_link_matricies[direction, planeindex, nodeindex] = filled_link_matricies_dict[self.plaquette_corner_dict[(node, plane)][0]][plane[1]]
+            for planeindex, plane in enumerate([(direction, j) for j in range(self.dimensions) if j!=direction]):
+                for nodeindex, node in enumerate(self.real_nodearray):
+                    plaquette_corners = self.plaquette_corner_dict[(node, plane)]
+                    second_plaquette_corners = self.v_second_plaquette_corner_dict[(node, plane)]
+                    #for the first term of V
+                    first_link_matricies[direction, planeindex, nodeindex] = \
+                        filled_link_matricies_dict[plaquette_corners[0]][plane[0]]
+                    second_link_matricies[direction, planeindex, nodeindex] =\
+                        filled_link_matricies_dict[plaquette_corners[1]][plane[1]]
+                    third_link_matricies[direction, planeindex, nodeindex] =\
+                        filled_link_matricies_dict[plaquette_corners[3]][plane[0]]
+                    fourth_link_matricies[direction, planeindex, nodeindex] = \
+                        filled_link_matricies_dict[plaquette_corners[0]][plane[1]]
+                    #second term of V
+                    v2_first_link_matricies[direction, planeindex, nodeindex] = \
+                        filled_link_matricies_dict[second_plaquette_corners[0]][plane[0]]
+                    v2_second_link_matricies[direction, planeindex, nodeindex] = \
+                        filled_link_matricies_dict[second_plaquette_corners[2]][plane[1]]
+                    v2_third_link_matricies[direction, planeindex, nodeindex] = \
+                        filled_link_matricies_dict[second_plaquette_corners[3]][plane[0]]
+                    v2_fourth_link_matricies[direction, planeindex, nodeindex] = \
+                        filled_link_matricies_dict[second_plaquette_corners[0]][plane[1]]
+
+
         third_link_matricies = np.transpose(np.conj(third_link_matricies), axes=[0,1,2,4,3])
         fourth_link_matricies = np.transpose(np.conj(fourth_link_matricies), axes=[0, 1, 2, 4, 3])
-        Barray = np.stack(
-            [[[self.Bdict[(node, plane)] for node in self.real_nodearray] for plane in
-              self.planeslist if direction in plane] for direction
-             in range(len(momentum_array))])
-        plaquette_holonomy_array = first_link_matricies @ second_link_matricies @ third_link_matricies @ fourth_link_matricies
+
+        v2_second_link_matricies = np.transpose(np.conj(v2_second_link_matricies), axes=[0, 1, 2, 4, 3])
+        v2_third_link_matricies = np.transpose(np.conj(v2_third_link_matricies), axes=[0, 1, 2, 4, 3])
+
+        Barray = np.stack([
+            [[self.Bdict[(node, plane)] for node in self.real_nodearray] for plane in
+              [(direction, j) for j in range(self.dimensions)
+               if j != direction]] for direction
+              in range(len(momentum_array))
+             ])
+
+        V2_Barray = np.stack([
+            [[self.V2_Bdict[(node, plane)] for node in self.real_nodearray] for plane in
+               [(direction, j) for j in range(self.dimensions)
+              if j != direction]] for direction in range(len(momentum_array))
+        ])
+
+
+        plaquette_holonomy_array = first_link_matricies\
+                                   @ second_link_matricies\
+                                   @ third_link_matricies\
+                                   @ fourth_link_matricies
+
+
+        second_term_holonomy = v2_first_link_matricies\
+                               @ v2_second_link_matricies\
+                               @ v2_third_link_matricies\
+                               @ v2_fourth_link_matricies
+
+        second_term_holonomy = V2_Barray[:,:,:,np.newaxis, np.newaxis] * second_term_holonomy #should be associated with B shifted somehow
         plaquette_holonomy_array = Barray[:,:,:,np.newaxis, np.newaxis] * plaquette_holonomy_array
-        holonomies_sum = np.sum(plaquette_holonomy_array, axis = 1) #sum over each plane (axes are: direction, plane, node, (matrix))
-        momentum_array -= 1/2 * dt * project(holonomies_sum)
+        holonomies_sum = np.sum(plaquette_holonomy_array, axis = 1) + np.sum(second_term_holonomy, axis = 1)  #sum over each plane (axes are: direction, plane, node, (matrix))
+        momentum_array += dt * (np.transpose(np.conj(holonomies_sum), axes=[0,1,3,2]) - holonomies_sum)
+        momentum_array = project(momentum_array)
         new_momentum_dict = dict(
             zip(initial_config[0].keys(), list(np.transpose(np.array(momentum_array), axes=[1, 0, 2, 3]))))
-        new_config = [initial_config[0], new_momentum_dict]
+        new_config = [initial_config[0], new_momentum_dict]"""
+
+
+        #do it slowly to make sure you're implementing EOM correctly. This conserves energy it's just slow as shit
+        for nodeindex, node in enumerate(self.real_nodearray):
+            for direction in range(self.dimensions):
+                Vfirst = 0
+                Vsecond = 0
+                for sum_direction  in range(self.dimensions):
+                    if sum_direction != direction:
+                        Vfirst+=link_dict[self.translate(node, direction, 1)][sum_direction]\
+                                @ link_dict[self.translate(node, sum_direction, 1)][direction].conj().T\
+                                @ link_dict[node][sum_direction].conj().T
+                        Vsecond+=link_dict[self.translate(self.translate(node,sum_direction, -1), direction, 1)][sum_direction].conj().T \
+                                 @ link_dict[self.translate(node, sum_direction,-1)][direction].conj().T\
+                                 @ link_dict[self.translate(node, sum_direction, -1)][sum_direction]
+                Vdirection = Vfirst + Vsecond
+                momentum_change = Vdirection.conj().T @ link_dict[node][direction].conj().T - link_dict[node][direction] @ Vdirection
+                momentum_dict[node][direction]+=momentum_change * dt
+
+        new_momentum_dict = dict(
+            zip(initial_config[0].keys(), list(np.transpose(np.array(momentum_array), axes=[1, 0, 2, 3]))))
+        new_config = [initial_config[0], momentum_dict]
+        #print("momentum gives:", momentum_array)
+
+
         return new_config
+
 
     def evolution_step(self, config, dt):
         momentum_config = self.momentum_update(config, dt)
         link_config = self.link_update(momentum_config, dt)
+        ham = self.hamiltonian(link_config)
+        hamiltonian_list.append(ham)
+        print("hamiltonian after step:", ham)
         return link_config
 
-    def time_evolve(self, initial_config, evolution_time, nsteps=10):
+    def time_evolve(self, initial_config, evolution_time, nsteps=10000):
         starttime = time.time()
         config = initial_config
         dt = evolution_time / nsteps
-        for i in range(nsteps):
+        ham = self.hamiltonian(config)
+        hamiltonian_list.append(ham)
+        print("initial Hamiltonian: ", ham)
+        config = self.momentum_update(config, dt/2)
+        self.link_update(config, dt)
+        for i in range(nsteps-1):
             print("Evolution step:", i)
             config = self.evolution_step(config, dt)
+        self.momentum_update(config, dt/2)
         print("Elapsed time for time evolution:", time.time() - starttime)
+        plt.figure()
+        plt.plot(np.arange(0,nsteps, 1), hamiltonian_list, label = "energy")
+        plt.plot(np.arange(0, nsteps, 1), action_list, label = "action")
+        plt.plot(np.arange(0, nsteps, 1), momentum_list, label = "momentum")
+        plt.plot(np.arange(0, nsteps, 1)[1:], np.array(action_change_list)[1:]+np.array(momentum_change_list)[1:], label="changesum")
+        print(np.average(np.array(action_change_list)[1:]+np.array(momentum_change_list)[1:]) *nsteps)
+        plt.legend()
         return config
 
-    def generate_candidate_configuration(self, current_configuration, evol_time):
-        new_configuration = self.time_evolve(current_configuration, evol_time)
+    def generate_candidate_configuration(self, current_configuration, evol_time, number_steps):
+        new_configuration = self.time_evolve(current_configuration, evol_time, nsteps = number_steps)
         return new_configuration
 
-    def hamiltonian(self, configuration):  # only takes a ghost filled configuration
-        link_matricies_dict = configuration[0]
+    def hamiltonian(self, configuration): #action: sum(nodes in lattice) sum(mu < nu) Tr(1 - B_{mu nu}(n) U_{mu nu}(n))
         momentum_dict = configuration[1]
         momentum_array = np.array(list(momentum_dict.values()))
 
         filled_configuration = self.ghost_fill_configuration(configuration)
+        filled_link_matricies_dict = filled_configuration[0]
 
 
-        filled_momentum_dict = filled_configuration[0]
-        filled_link_matricies_dict = filled_configuration[1]
+
+        # calculating action of configuration
+        """node_action_contribs = 0
+        for plane in self.planeslist:  # generate all plaquette holonomies
+            node_plaquette_corners = []
+            Blist = []
+            for node in self.real_nodearray:
+                node_plaquette_corners.append(self.get_plaquette_corners(node, plane))
+                Blist.append(self.B(plane[0], plane[1], node))
+            node_plaquette_corners = np.array(node_plaquette_corners).T
+            Blist = np.array(Blist)
+            first_link_matricies = np.array(
+                [link_matricies[plane[0]] for link_matricies in
+                 [filled_link_matricies_dict[node] for node in node_plaquette_corners[0]]])
+            second_link_matricies = np.array(
+                [link_matricies[plane[1]] for link_matricies in
+                 [filled_link_matricies_dict[node] for node in node_plaquette_corners[1]]])
+            third_link_matricies = np.array(
+                [link_matricies[plane[0]].conj().T for link_matricies in
+                 [filled_link_matricies_dict[node] for node in node_plaquette_corners[3]]])
+            fourth_link_matricies = np.array(
+                [link_matricies[plane[1]].conj().T for link_matricies in
+                 [filled_link_matricies_dict[node] for node in node_plaquette_corners[0]]])
+            # plane_holonomies: gives array of each matrix corresponding to the holonomy around a plaquette
+            # in list corresponding to posiiton of corner node in self.real_nodearray
+            plane_holonomies = Blist[:, np.newaxis, np.newaxis] * (
+            (first_link_matricies @ second_link_matricies @ third_link_matricies @ fourth_link_matricies))
+            node_action_contribs += np.sum(np.trace(plane_holonomies, axis1=1, axis2=2))
+        action =2 *(len(self.planeslist) * self.num_nodes - node_action_contribs)"""
+
+        #action = self.get_config_action(filled_configuration)
+        runningsum = 0
+        for node in self.real_nodearray:
+            for direction1 in range(self.dimensions):
+                for direction2 in range(self.dimensions):
+                    if direction1 != direction2:
+                        node1 = filled_link_matricies_dict[node][direction1]
+                        node2 = filled_link_matricies_dict[self.translate(node, direction1, 1)][direction2]
+                        node3 = filled_link_matricies_dict[self.translate(node, direction2, 1)][direction1].conj().T
+                        node4 = filled_link_matricies_dict[node][direction2].conj().T
+                        holonomy = node1 @ node2 @ node3 @ node4
+                        runningsum += np.trace(np.matrix([[1,0],[0,1]]) - self.B(direction1, direction2, node) * holonomy)
+        action = runningsum
+
+        # calculating fictious momentum contribution
+        dagmomen = np.conj(np.transpose(momentum_array, axes = (0,1,3,2)))
+        momentum_contrib = 0.5 * np.trace(np.sum(momentum_array @ dagmomen, axis=(0,1)), axis1 = -1, axis2 = -2)
+
+        # returning Hamiltonian value
+        hamiltonian = momentum_contrib + action
+        if len(momentum_list)==0:
+            momentum_change_list.append(momentum_contrib)
+            action_change_list.append(action)
+        else:
+            momentum_change_list.append(momentum_contrib - momentum_list[-1])
+            action_change_list.append(action - action_list[-1])
+
+        momentum_list.append(momentum_contrib)
+        action_list.append(action)
+        print("action:",action)
+        print("momentum contrib:", momentum_contrib)
+        return np.real(hamiltonian)
+
+    def get_config_action(self, configuration):
 
 
+        filled_configuration = self.ghost_fill_configuration(configuration)
+
+        filled_link_matricies_dict = filled_configuration[0]
 
         # calculating action of configuration
         node_action_contribs = 0
@@ -593,20 +809,18 @@ class Lattice:  # ND torus lattice
             # plane_holonomies: gives array of each matrix corresponding to the holonomy around a plaquette
             # in list corresponding to posiiton of corner node in self.real_nodearray
             plane_holonomies = Blist[:, np.newaxis, np.newaxis] * (
-            (first_link_matricies @ second_link_matricies @ third_link_matricies @ fourth_link_matricies))
+                (first_link_matricies @ second_link_matricies @ third_link_matricies @ fourth_link_matricies))
             node_action_contribs += np.sum(np.trace(plane_holonomies, axis1=1, axis2=2))
-        action = 2 * len(self.planeslist) * self.num_nodes - node_action_contribs
-
-        # calculating fictuous momentum contribution
-        momentum_contrib = -np.trace(np.sum(momentum_array @ momentum_array, axis=(0,1)), axis1 = -1, axis2 = -2)
-
-        # returning Hamiltonian value
-        hamiltonian = momentum_contrib + action
-        return np.real(hamiltonian)
+        action =  2 * (len(self.planeslist) * self.num_nodes - node_action_contribs)
+        return action
 
     def accept_config(self, new_configuration, initial_configuration):
+        print("initial action")
         Hinitial = self.hamiltonian(initial_configuration)
+        print(Hinitial)
+        print("final action")
         Hnew = self.hamiltonian(new_configuration)
+        print(Hnew)
         difference = Hnew - Hinitial
         transition_prob = np.minimum(1, np.exp(-difference))
         randomvar = random.uniform(0, 1)
@@ -621,16 +835,49 @@ class Lattice:  # ND torus lattice
         else:
             return False
 
-    def chain(self, number_iterations):
+    def chain(self, number_iterations, evolution_time, number_steps):
+        global gork
+        global hamiltonian_list
+        global action_list
+        global momentum_list
+        global action_change_list
+        global momentum_change_list
         starttime = time.time()
+        acceptances = 0
         momentum = self.random_momentum()
+        #momentumvals = project(np.full(np.shape(np.array(list(momentum.values()))), 0j, dtype='complex128')) #action 175 momentum 85 issue issue
+        #momentum = dict(zip(momentum.keys(),momentumvals))
         for i in range(number_iterations):
-            print("Configuration generation: ", i)
-            old_config = [self.get_link_matrix_dict(), momentum]
-            candidate = self.generate_candidate_configuration(old_config, 1)
-            if self.accept_config(old_config, candidate):
-                momentum = candidate[1]
-            else:
-                continue
+            hamiltonian_list = []
+            action_list = []
+            momentum_list = []
+            action_change_list = []
+            momentum_change_list = []
+            holder = []
+            for arraylist in list(momentum.values()):
+                newlist = []
+                for array in arraylist:
+                    newlist.append(array.copy())
+                holder.append(newlist)
+             #momentumlist is changing the array objects in memory in holder, since copying momentum doesn't change that you're copying a list of specific objects in memory
+            #think fixed
+            print(holder[0])
+            old_config = [self.get_link_matrix_dict(), momentum.copy()]
+            candidate = self.generate_candidate_configuration(old_config, evolution_time, number_steps)
+            print(holder[0])
+            old_config = [self.get_link_matrix_dict(), dict(zip(momentum.keys(),holder))]
+            if self.accept_config(candidate, old_config):
+                print("accepted")
+                acceptances+=1
+            momentum = self.random_momentum()
         print("Avg time per config: ", (time.time()-starttime)/number_iterations)
-        return
+        print("acceptance rate:", acceptances/number_iterations)
+
+        hamiltonian_list = []
+        action_list = []
+        momentum_list = []
+        momentum_change_list = []
+        action_change_list = []
+
+        #return gork
+
