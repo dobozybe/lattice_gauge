@@ -11,7 +11,8 @@ from sympy import LeviCivita
 import scipy.stats
 import scipy.linalg as linalg
 
-##todo: Note to self: check that you're not using convention-dependent formulas! Rubakov assumes a Tr[t^a t^b] = 1/2 \delta normalization and some of the HMC papers may as well. Don't mess that up. 
+g = 1
+
 
 hamiltonian_list = []
 action_list = []
@@ -37,7 +38,7 @@ def su2_exp(matrixarray):
     param3 = np.trace(matrixarray @ lie_gens[2].conj().T, axis1=1, axis2=2)/2
     paramarray = np.stack([param1, param2, param3]).T
     normparams = np.sqrt(param1 ** 2 + param2 ** 2 + param3 ** 2)
-    if np.max(np.imag(normparams)) > 0.0001:
+    if np.max(np.imag(normparams))*(g**2) > 0.01:
         print("error! Normparams in su2_exp is imaginary!", np.max(np.imag(normparams)))
         return None
     normparams = np.float64(normparams)
@@ -551,7 +552,9 @@ class Lattice:  # ND torus lattice
         new_config = [new_link_dict, initial_config[1]]
         return new_config
 
-
+    ##todo:vectorize
+    def vectorized_momentum_update(self,initial_config_dt):
+        pass
     def momentum_update(self, initial_config, dt):  # sends momentum at n*dt - dt/2 to n * dt + dt/2
         momentum_array = np.transpose(np.array(list(initial_config[1].values())), axes=[1, 0, 2,
                                                                                        3])  # array with dimensions [direction, node, matrix]
@@ -652,14 +655,14 @@ class Lattice:  # ND torus lattice
                 Vsecond = 0
                 for sum_direction  in range(self.dimensions):
                     if sum_direction != direction:
-                        Vfirst+=link_dict[self.translate(node, direction, 1)][sum_direction]\
+                        Vfirst+=self.B(direction, sum_direction, node) * link_dict[self.translate(node, direction, 1)][sum_direction]\
                                 @ link_dict[self.translate(node, sum_direction, 1)][direction].conj().T\
                                 @ link_dict[node][sum_direction].conj().T
-                        Vsecond+=link_dict[self.translate(self.translate(node,sum_direction, -1), direction, 1)][sum_direction].conj().T \
+                        Vsecond+=self.B(direction, sum_direction, self.translate(node, sum_direction, -1)) * link_dict[self.translate(self.translate(node,sum_direction, -1), direction, 1)][sum_direction].conj().T \
                                  @ link_dict[self.translate(node, sum_direction,-1)][direction].conj().T\
                                  @ link_dict[self.translate(node, sum_direction, -1)][sum_direction]
                 Vdirection = Vfirst + Vsecond
-                momentum_change = Vdirection.conj().T @ link_dict[node][direction].conj().T - link_dict[node][direction] @ Vdirection
+                momentum_change = (1/g**2) * (Vdirection.conj().T @ link_dict[node][direction].conj().T - link_dict[node][direction] @ Vdirection)
                 momentum_dict[node][direction]+=momentum_change * dt
 
         new_momentum_dict = dict(
@@ -676,7 +679,7 @@ class Lattice:  # ND torus lattice
         link_config = self.link_update(momentum_config, dt)
         ham = self.hamiltonian(link_config)
         hamiltonian_list.append(ham)
-        print("hamiltonian after step:", ham)
+        #print("hamiltonian after step:", ham)
         return link_config
 
     def time_evolve(self, initial_config, evolution_time, nsteps=10000):
@@ -687,18 +690,18 @@ class Lattice:  # ND torus lattice
         hamiltonian_list.append(ham)
         print("initial Hamiltonian: ", ham)
         config = self.momentum_update(config, dt/2)
-        self.link_update(config, dt)
+        config = self.link_update(config, dt)
         for i in range(nsteps-1):
-            print("Evolution step:", i)
+            #print("Evolution step:", i)
             config = self.evolution_step(config, dt)
-        self.momentum_update(config, dt/2)
+        config = self.momentum_update(config, dt/2)
         print("Elapsed time for time evolution:", time.time() - starttime)
         plt.figure()
         plt.plot(np.arange(0,nsteps, 1), hamiltonian_list, label = "energy")
         plt.plot(np.arange(0, nsteps, 1), action_list, label = "action")
         plt.plot(np.arange(0, nsteps, 1), momentum_list, label = "momentum")
         plt.plot(np.arange(0, nsteps, 1)[1:], np.array(action_change_list)[1:]+np.array(momentum_change_list)[1:], label="changesum")
-        print(np.average(np.array(action_change_list)[1:]+np.array(momentum_change_list)[1:]) *nsteps)
+        #print(np.average(np.array(action_change_list)[1:]+np.array(momentum_change_list)[1:]) *nsteps)
         plt.legend()
         return config
 
@@ -773,8 +776,8 @@ class Lattice:  # ND torus lattice
 
         momentum_list.append(momentum_contrib)
         action_list.append(action)
-        print("action:",action)
-        print("momentum contrib:", momentum_contrib)
+        #print("action:",action)
+        #print("momentum contrib:", momentum_contrib)
         return np.real(hamiltonian)
 
     def get_config_action(self, configuration):
@@ -811,21 +814,25 @@ class Lattice:  # ND torus lattice
             plane_holonomies = Blist[:, np.newaxis, np.newaxis] * (
                 (first_link_matricies @ second_link_matricies @ third_link_matricies @ fourth_link_matricies))
             node_action_contribs += np.sum(np.trace(plane_holonomies, axis1=1, axis2=2))
+
+            node_action_contribs = (1/g**2) * node_action_contribs
         action =  2 * (len(self.planeslist) * self.num_nodes - node_action_contribs)
         return action
 
     def accept_config(self, new_configuration, initial_configuration):
-        print("initial action")
+        print("initial Hamiltonian, Action")
         Hinitial = self.hamiltonian(initial_configuration)
-        print(Hinitial)
-        print("final action")
+        Ainitial = self.get_config_action(initial_configuration)
+        print(Hinitial, Ainitial)
+        print("final Hamiltonian, action")
         Hnew = self.hamiltonian(new_configuration)
-        print(Hnew)
+        Anew = self.get_config_action(new_configuration)
+        print(Hnew, Anew)
         difference = Hnew - Hinitial
         transition_prob = np.minimum(1, np.exp(-difference))
         randomvar = random.uniform(0, 1)
         print("Hamiltonian difference:", difference, "Configuration transition probability:", transition_prob)
-        print("Hamiltonian difference over initial Hamiltonian:", np.abs(difference/Hinitial))
+        #print("Hamiltonian difference over initial Hamiltonian:", np.abs(difference/Hinitial))
         if randomvar < transition_prob:
             new_matrix_dict = dict(zip(self.real_nodearray, new_configuration[0].values()))
             for node in self.real_nodearray:
@@ -861,10 +868,10 @@ class Lattice:  # ND torus lattice
                 holder.append(newlist)
              #momentumlist is changing the array objects in memory in holder, since copying momentum doesn't change that you're copying a list of specific objects in memory
             #think fixed
-            print(holder[0])
+            #print(holder[0])
             old_config = [self.get_link_matrix_dict(), momentum.copy()]
             candidate = self.generate_candidate_configuration(old_config, evolution_time, number_steps)
-            print(holder[0])
+            #print(holder[0])
             old_config = [self.get_link_matrix_dict(), dict(zip(momentum.keys(),holder))]
             if self.accept_config(candidate, old_config):
                 print("accepted")

@@ -9,47 +9,51 @@ import cProfile
 import pickle
 import time
 
-
+##TODO: Increase acceptance rate
+##TODO: Clean up Momentum Update Code
+##TODO: Better Hamiltonian Calculation for graph
 
 twistmatrix = [[0,0,0,1],[0,0,1,0],[0,-1,0,0],[-1,0,0,0]]
 
-myLattice = Lattice([3,3,3,3], twistmatrix = twistmatrix) #24,6,6,24
-
-#myLattice = Lattice([2,2])
+#myLattice = Lattice([3,3,3,3], twistmatrix = twistmatrix) #24,6,6,24
 
 
-"""for node in myLattice.real_nodearray:
-    for link in node.links:
-        thislink = link[0]
-        for direction in range(myLattice.dimensions):
-            thislink.set_matrix(np.array([[1,0],[0,1]], dtype = np.complex128))
 
-print(myLattice.get_action())
+def create_saved_lattice():
+    myLattice = Lattice([3,3,3,3])
+    momentum = myLattice.random_momentum()
+    myLattice.save_links("saved_test_lattice")
+    lattice_config = list(momentum.values())
+    with open("savedmomentum.pkl", "wb") as f:
+        pickle.dump(lattice_config, f)
+    return
 
-config = [myLattice.get_link_matrix_dict(), myLattice.random_momentum()]
 
-print(myLattice.get_config_action(config))"""
 
 #x = myLattice.chain(1, 5, 50)
 
 
 
 
-#Energy is conserved when: initial momentum is 0, or if we're on such a trajectory.
-def Newchain(number_iterations, evolution_time, number_steps):
+
+
+def testchain(number_iterations, evolution_time, number_steps):
     starttime = time.time()
     with open("savedmomentum.pkl", "rb") as f:
-        momentum = pickle.load(f)
-    momentumvals = list(momentum.values())
-
-    momentumvals = project(np.full(np.shape(np.array(list(momentum.values()))), 0j, dtype='complex128')) #action 175 momentum 85 issue issue
-    # momentum = dict(zip(momentum.keys(),momentumvals))
-    keys = list(myLattice.get_link_matrix_dict().keys())
-    momentum = dict(zip(keys, momentumvals))
+        momentumvals = pickle.load(f)
+    myLattice = Lattice([3,3,3,3], filename="saved_test_lattice")
     acceptances = 0
-    old_config = [myLattice.get_link_matrix_dict(), momentum]
+    momentum = dict(zip(myLattice.get_link_matrix_dict().keys(),momentumvals))
     for i in range(number_iterations):
+        holder = []
+        for arraylist in list(momentum.values()):
+            newlist = []
+            for array in arraylist:
+                newlist.append(array.copy())
+            holder.append(newlist)
+        old_config = [myLattice.get_link_matrix_dict(), momentum]
         candidate = myLattice.generate_candidate_configuration(old_config, evolution_time, number_steps)
+        old_config = [myLattice.get_link_matrix_dict(), dict(zip(momentum.keys(), holder))]
         if myLattice.accept_config(candidate, old_config):
             print("accepted")
             acceptances += 1
@@ -59,9 +63,12 @@ def Newchain(number_iterations, evolution_time, number_steps):
     return candidate
 
 
-x = myLattice.chain(1, 5, 800)
-#y = Newchain(1, 5, 100)
 
+#create_saved_lattice()
+#testchain(1, 10, 100) #seem to get a ~60% acceptance rate with a dt of 0.003?!
+
+myLattice = Lattice([3, 3, 3, 3], twistmatrix=twistmatrix)
+myLattice.chain(5, 10, 500)
 
 
 plt.show()
