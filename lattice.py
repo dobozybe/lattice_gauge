@@ -21,6 +21,24 @@ momentum_change_list=[]
 action_change_list=[]
 
 global gork
+
+def dicts_equal(d1, d2, tol=True):
+    if d1.keys() != d2.keys():
+        print("Different keys:")
+        print("Only in d1:", d1.keys() - d2.keys())
+        print("Only in d2:", d2.keys() - d1.keys())
+        return False
+    cmp = np.allclose if tol else np.array_equal
+    equal = True
+    for k in d1:
+        if not cmp(d1[k], d2[k]):
+            print(f"Mismatch at key: {k}")
+            print("d1 value:", d1[k])
+            print("d2 value:", d2[k])
+            equal = False
+    return equal
+
+
 def get_identity():
     return np.diag(np.full(2, 1))
 
@@ -111,6 +129,7 @@ class Lattice:  # ND torus lattice
         self.V2_Bdict = {}
         self.link_dict = {}
 
+
         self.num_nodes = 1  # not including ghosts
         for i in shape:
             self.num_nodes *= i
@@ -154,7 +173,10 @@ class Lattice:  # ND torus lattice
                 self.plaquette_corner_dict[(node, plane)] = self.get_plaquette_corners(node, plane)
                 self.Bdict[(node, plane)] = self.B(plane[0], plane[1], node)"""
 
-        for node in self.real_nodearray:
+        self.staple_array = np.empty((len(self.real_nodearray), self.dimensions, self.dimensions, 2, 3), dtype = object)
+        self.Barray = np.empty((len(self.real_nodearray), self.dimensions, self.dimensions, 1, 1), dtype = np.complex64)
+        self.V2_Barray =np.empty((len(self.real_nodearray), self.dimensions, self.dimensions, 1, 1), dtype = np.complex64)
+        for nodeindex,node in enumerate(self.real_nodearray):
             for mu in range(self.dimensions):
                 for nu in range(self.dimensions):
                     if nu != mu:
@@ -163,6 +185,26 @@ class Lattice:  # ND torus lattice
                         self.v_second_plaquette_corner_dict[(node,plane)] = self.v2_second_plaquette_corners(node, plane)
                         self.Bdict[(node, plane)] = self.B(plane[0], plane[1], node)
                         self.V2_Bdict[(node, plane)] = self.B(plane[0], plane[1], self.translate(node, plane[1], -1))
+
+                        self.Barray[nodeindex, mu, nu, 0,0] = self.B(mu, nu, node)
+                        self.V2_Barray[nodeindex, mu, nu, 0, 0] = self.B(mu, nu, self.translate(node, nu, -1))
+
+                        #setting staple matricies
+                        self.staple_array[nodeindex, mu, nu, 0,0] = self.translate(node, mu, 1).get_link(nu, 0)
+                        self.staple_array[nodeindex, mu, nu, 0, 1] = self.translate(node, nu, 1).get_link(mu, 0)
+                        self.staple_array[nodeindex, mu, nu, 0, 2] = node.get_link(nu, 0)
+                        self.staple_array[nodeindex, mu, nu, 1, 0] = self.translate(self.translate(node, mu, 1), nu, -1).get_link(nu, 0)
+                        self.staple_array[nodeindex, mu, nu, 1, 1] = self.translate(node, nu, -1).get_link(mu, 0)
+                        self.staple_array[nodeindex, mu, nu, 1, 2] = self.translate(node, nu, -1).get_link(nu, 0)
+                    elif nu == mu:
+                        self.Barray[nodeindex, mu, nu, 0, 0] = self.B(mu, nu, node)
+                        self.V2_Barray[nodeindex, mu, nu, 0, 0] = self.B(mu, nu, self.translate(node, nu, -1))
+                        self.staple_array[nodeindex, mu, nu, 0, 0] = None
+                        self.staple_array[nodeindex, mu, nu, 0, 1] = None
+                        self.staple_array[nodeindex, mu, nu, 0, 2] = None
+                        self.staple_array[nodeindex, mu, nu, 1, 0] = None
+                        self.staple_array[nodeindex, mu, nu, 1, 1] = None
+                        self.staple_array[nodeindex, mu, nu, 1, 2] = None
 
         print("Initialized in:", time.time() - starttime)
 
@@ -552,10 +594,67 @@ class Lattice:  # ND torus lattice
         new_config = [new_link_dict, initial_config[1]]
         return new_config
 
-    ##todo:vectorize
-    def vectorized_momentum_update(self,initial_config_dt):
-        pass
+
+    def vectorized_momentum_update(self,initial_config,dt):
+        starttime = time.time()
+        link_dict = initial_config[0]
+        momentum_array = np.array(list(initial_config[1].values()))
+        link_array = np.array(list(link_dict.values()))
+        staple_matricies = np.array([link_dict[link.node1][link.direction] if link!=None else np.array([[0,0],[0,0]]) for link in self.staple_array.flatten()]).reshape(self.staple_array.shape + (2,2))
+
+        #indicies are node, direction mu, direction nu, first/second term, list of staple matricies
+
+        #extract staple matricies
+        firststaplematricies, secondstaplematricies = np.split(staple_matricies, 2, axis = 3)
+        staple11, staple12, staple13 = np.split(firststaplematricies, 3, axis = 4)
+        staple21, staple22, staple23 = np.split(secondstaplematricies, 3, axis=4)
+
+        if np.isnan(staple11).any():
+            print("NaNs in staple11")
+        if np.isnan(staple12).any():
+            print("NaNs in staple12")
+        if np.isnan(staple13).any():
+            print("NaNs in staple13")
+        if np.isnan(staple21).any():
+            print("NaNs in staple21")
+        if np.isnan(staple22).any():
+            print("NaNs in staple22")
+        if np.isnan(staple23).any():
+            print("NaNs in staple23")
+
+        # calculate the twisted staple for each nu (index 2)
+        firststaple = self.Barray[...,None,None] * staple11 @ staple12.conj().swapaxes(-1,-2) @ staple13.conj().swapaxes(-1,-2)
+        secondstaple = self.V2_Barray[...,None, None] * staple21.conj().swapaxes(-1,-2) @ staple22.conj().swapaxes(-1,-2) @ staple23
+
+        if np.isnan(firststaple).any():
+            print("nan in firststaple")
+            if np.isnan(self.Barray[...,None,None]).any():
+                print("nan from B")
+        if np.isnan(secondstaple).any():
+            print("nan in secondstaple")
+            if np.isnan(self.V2_Barray[...,None,None]).any():
+                print("nan from BV2")
+
+        #adding two terms together to get full staple then summing to get Vmu array. Squeeze to get rid of vestigal indicies
+        staplesum = firststaple + secondstaple
+        Varray = np.sum(staplesum, axis = 2)
+        Varray = np.squeeze(Varray)
+
+        #calculating momentum update
+        stapleterm = link_array @ Varray
+        momentum_change = (1/g**2) * (stapleterm.conj().swapaxes(-1,-2) - stapleterm) * dt
+
+        #updating momentum
+        new_momentum_array = momentum_array + momentum_change
+
+        #new config
+        new_config = [initial_config[0], dict(zip(initial_config[1].keys(), list(new_momentum_array)))]
+        print("elapsed", time.time()-starttime)
+        return new_config
+
+    #works but is slow as balls. Use vectorized whenever possible
     def momentum_update(self, initial_config, dt):  # sends momentum at n*dt - dt/2 to n * dt + dt/2
+        starttime = time.time()
         momentum_array = np.transpose(np.array(list(initial_config[1].values())), axes=[1, 0, 2,
                                                                                        3])  # array with dimensions [direction, node, matrix]
         momentum_dict = initial_config[1].copy()
@@ -567,87 +666,8 @@ class Lattice:  # ND torus lattice
 
 
         #link matricies dicts have indicies [direction, plane, node, matrix]
-        """first_link_matricies = np.empty((self.dimensions, (self.dimensions-1), len(self.real_nodearray), 2,2), dtype = complex)
-        second_link_matricies = np.empty((self.dimensions, (self.dimensions-1), len(self.real_nodearray), 2, 2),
-                                        dtype=complex)
-        third_link_matricies = np.empty((self.dimensions, (self.dimensions-1), len(self.real_nodearray), 2, 2),
-                                        dtype=complex)
-        fourth_link_matricies = np.empty((self.dimensions, (self.dimensions-1), len(self.real_nodearray), 2, 2),
-                                        dtype=complex)
-        v2_first_link_matricies = np.empty((self.dimensions, (self.dimensions-1), len(self.real_nodearray), 2, 2),
-                                        dtype=complex)
-        v2_second_link_matricies = np.empty((self.dimensions, (self.dimensions-1), len(self.real_nodearray), 2, 2),
-                                         dtype=complex)
-        v2_third_link_matricies = np.empty((self.dimensions, (self.dimensions-1), len(self.real_nodearray), 2, 2),
-                                        dtype=complex)
-        v2_fourth_link_matricies = np.empty((self.dimensions, (self.dimensions-1), len(self.real_nodearray), 2, 2),
-                                         dtype=complex)
-        for direction in range(self.dimensions):
-            for planeindex, plane in enumerate([(direction, j) for j in range(self.dimensions) if j!=direction]):
-                for nodeindex, node in enumerate(self.real_nodearray):
-                    plaquette_corners = self.plaquette_corner_dict[(node, plane)]
-                    second_plaquette_corners = self.v_second_plaquette_corner_dict[(node, plane)]
-                    #for the first term of V
-                    first_link_matricies[direction, planeindex, nodeindex] = \
-                        filled_link_matricies_dict[plaquette_corners[0]][plane[0]]
-                    second_link_matricies[direction, planeindex, nodeindex] =\
-                        filled_link_matricies_dict[plaquette_corners[1]][plane[1]]
-                    third_link_matricies[direction, planeindex, nodeindex] =\
-                        filled_link_matricies_dict[plaquette_corners[3]][plane[0]]
-                    fourth_link_matricies[direction, planeindex, nodeindex] = \
-                        filled_link_matricies_dict[plaquette_corners[0]][plane[1]]
-                    #second term of V
-                    v2_first_link_matricies[direction, planeindex, nodeindex] = \
-                        filled_link_matricies_dict[second_plaquette_corners[0]][plane[0]]
-                    v2_second_link_matricies[direction, planeindex, nodeindex] = \
-                        filled_link_matricies_dict[second_plaquette_corners[2]][plane[1]]
-                    v2_third_link_matricies[direction, planeindex, nodeindex] = \
-                        filled_link_matricies_dict[second_plaquette_corners[3]][plane[0]]
-                    v2_fourth_link_matricies[direction, planeindex, nodeindex] = \
-                        filled_link_matricies_dict[second_plaquette_corners[0]][plane[1]]
 
-
-        third_link_matricies = np.transpose(np.conj(third_link_matricies), axes=[0,1,2,4,3])
-        fourth_link_matricies = np.transpose(np.conj(fourth_link_matricies), axes=[0, 1, 2, 4, 3])
-
-        v2_second_link_matricies = np.transpose(np.conj(v2_second_link_matricies), axes=[0, 1, 2, 4, 3])
-        v2_third_link_matricies = np.transpose(np.conj(v2_third_link_matricies), axes=[0, 1, 2, 4, 3])
-
-        Barray = np.stack([
-            [[self.Bdict[(node, plane)] for node in self.real_nodearray] for plane in
-              [(direction, j) for j in range(self.dimensions)
-               if j != direction]] for direction
-              in range(len(momentum_array))
-             ])
-
-        V2_Barray = np.stack([
-            [[self.V2_Bdict[(node, plane)] for node in self.real_nodearray] for plane in
-               [(direction, j) for j in range(self.dimensions)
-              if j != direction]] for direction in range(len(momentum_array))
-        ])
-
-
-        plaquette_holonomy_array = first_link_matricies\
-                                   @ second_link_matricies\
-                                   @ third_link_matricies\
-                                   @ fourth_link_matricies
-
-
-        second_term_holonomy = v2_first_link_matricies\
-                               @ v2_second_link_matricies\
-                               @ v2_third_link_matricies\
-                               @ v2_fourth_link_matricies
-
-        second_term_holonomy = V2_Barray[:,:,:,np.newaxis, np.newaxis] * second_term_holonomy #should be associated with B shifted somehow
-        plaquette_holonomy_array = Barray[:,:,:,np.newaxis, np.newaxis] * plaquette_holonomy_array
-        holonomies_sum = np.sum(plaquette_holonomy_array, axis = 1) + np.sum(second_term_holonomy, axis = 1)  #sum over each plane (axes are: direction, plane, node, (matrix))
-        momentum_array += dt * (np.transpose(np.conj(holonomies_sum), axes=[0,1,3,2]) - holonomies_sum)
-        momentum_array = project(momentum_array)
-        new_momentum_dict = dict(
-            zip(initial_config[0].keys(), list(np.transpose(np.array(momentum_array), axes=[1, 0, 2, 3]))))
-        new_config = [initial_config[0], new_momentum_dict]"""
-
-
+        Varray = np.empty((len(self.real_nodearray), self.dimensions), dtype = object)
         #do it slowly to make sure you're implementing EOM correctly. This conserves energy it's just slow as shit
         for nodeindex, node in enumerate(self.real_nodearray):
             for direction in range(self.dimensions):
@@ -661,21 +681,34 @@ class Lattice:  # ND torus lattice
                         Vsecond+=self.B(direction, sum_direction, self.translate(node, sum_direction, -1)) * link_dict[self.translate(self.translate(node,sum_direction, -1), direction, 1)][sum_direction].conj().T \
                                  @ link_dict[self.translate(node, sum_direction,-1)][direction].conj().T\
                                  @ link_dict[self.translate(node, sum_direction, -1)][sum_direction]
+
                 Vdirection = Vfirst + Vsecond
                 momentum_change = (1/g**2) * (Vdirection.conj().T @ link_dict[node][direction].conj().T - link_dict[node][direction] @ Vdirection)
-                momentum_dict[node][direction]+=momentum_change * dt
+                #momentum_dict[node][direction]+=momentum_change * dt
+                #test:
+                Varray[nodeindex, direction] = Vdirection
+                momentum_array[direction, nodeindex] +=momentum_change*dt
 
         new_momentum_dict = dict(
             zip(initial_config[0].keys(), list(np.transpose(np.array(momentum_array), axes=[1, 0, 2, 3]))))
-        new_config = [initial_config[0], momentum_dict]
+
+        #new_config = [initial_config[0], momentum_dict]
+        #test:
+        new_config = [initial_config[0], new_momentum_dict]
+
+
         #print("momentum gives:", momentum_array)
 
-
-        return new_config
+        #print("elapsed", time.time()-starttime)
+        return new_config #works but is slow
 
 
     def evolution_step(self, config, dt):
-        momentum_config = self.momentum_update(config, dt)
+        #test_momentum_config = self.vectorized_momentum_update(config, dt)
+        #momentum_config = self.momentum_update(config, dt)
+        momentum_config = self.vectorized_momentum_update(config, dt)
+        #print(dicts_equal(test_momentum_config[1], momentum_config[1]))
+
         link_config = self.link_update(momentum_config, dt)
         ham = self.hamiltonian(link_config)
         hamiltonian_list.append(ham)
@@ -689,18 +722,28 @@ class Lattice:  # ND torus lattice
         ham = self.hamiltonian(config)
         hamiltonian_list.append(ham)
         print("initial Hamiltonian: ", ham)
-        config = self.momentum_update(config, dt/2)
+        #test_config = self.vectorized_momentum_update(config, dt/2)
+        #config = self.momentum_update(config, dt/2)
+        config = self.vectorized_momentum_update(config, dt / 2)
+        #print("First half step", dicts_equal(test_config[1], config[1]))
         config = self.link_update(config, dt)
+        print("starting main evolution")
         for i in range(nsteps-1):
             #print("Evolution step:", i)
             config = self.evolution_step(config, dt)
-        config = self.momentum_update(config, dt/2)
+        #test_config = self.vectorized_momentum_update(config, dt/2)
+        #config = self.momentum_update(config, dt/2)
+        config = self.vectorized_momentum_update(config, dt / 2)
+        #print(dicts_equal(test_config[1], config[1]))
         print("Elapsed time for time evolution:", time.time() - starttime)
+        ham = self.hamiltonian(config)
+        print("Final Hamiltonian", ham)
+        hamiltonian_list.append(ham)
         plt.figure()
-        plt.plot(np.arange(0,nsteps, 1), hamiltonian_list, label = "energy")
-        plt.plot(np.arange(0, nsteps, 1), action_list, label = "action")
-        plt.plot(np.arange(0, nsteps, 1), momentum_list, label = "momentum")
-        plt.plot(np.arange(0, nsteps, 1)[1:], np.array(action_change_list)[1:]+np.array(momentum_change_list)[1:], label="changesum")
+        plt.plot(np.arange(0,nsteps+1, 1), hamiltonian_list, label = "energy")
+        plt.plot(np.arange(0, nsteps+1, 1), action_list, label = "action")
+        plt.plot(np.arange(0, nsteps+1, 1), momentum_list, label = "momentum")
+        plt.plot(np.arange(0, nsteps+1, 1)[1:], np.array(action_change_list)[1:]+np.array(momentum_change_list)[1:], label="changesum")
         #print(np.average(np.array(action_change_list)[1:]+np.array(momentum_change_list)[1:]) *nsteps)
         plt.legend()
         return config
@@ -887,4 +930,9 @@ class Lattice:  # ND torus lattice
         action_change_list = []
 
         #return gork
+
+
+
+
+
 

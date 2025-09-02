@@ -67,8 +67,32 @@ def testchain(number_iterations, evolution_time, number_steps):
 #create_saved_lattice()
 #testchain(1, 10, 100) #seem to get a ~60% acceptance rate with a dt of 0.003?!
 
-myLattice = Lattice([3, 3, 3, 3], twistmatrix=twistmatrix)
-myLattice.chain(5, 10, 500)
+myLattice = Lattice([2,2,2,2], twistmatrix = twistmatrix)
+momentum = myLattice.random_momentum()
+config = [myLattice.get_link_matrix_dict(), momentum]
+def dicts_equal(d1, d2, tol=True):
+    if d1.keys() != d2.keys():
+        print("Different keys:")
+        print("Only in d1:", d1.keys() - d2.keys())
+        print("Only in d2:", d2.keys() - d1.keys())
+        return False
+    cmp = np.allclose if tol else np.array_equal
+    equal = True
+    for k in d1:
+        if not cmp(d1[k], d2[k]):
+            print(f"Mismatch at key: {k}")
+            print("d1 value:", d1[k])
+            print("d2 value:", d2[k])
+            equal = False
+    return equal
+"""y, Vy = myLattice.momentum_update(config, 0.01)
+x, Vx = myLattice.vectorized_momentum_update(config, 0.01)
+y = y[1]
+x = x[1]
+print(dicts_equal(x,y))
 
+"""
+#print(dicts_equal(x,y))
 
+myLattice.chain(5, 10,400)
 plt.show()
