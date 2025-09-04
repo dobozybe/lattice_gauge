@@ -8,15 +8,21 @@ import sys
 import cProfile
 import pickle
 import time
+from observables import *
 
-##TODO: Increase acceptance rate
-##TODO: Clean up Momentum Update Code
 ##TODO: Better Hamiltonian Calculation for graph
 
-twistmatrix = [[0,0,0,1],[0,0,1,0],[0,-1,0,0],[-1,0,0,0]]
+twistmatrix = [[0,1,0,0],[-1,0,0,0],[0,0,0,1],[0,0,-1,0]]
 
-#myLattice = Lattice([3,3,3,3], twistmatrix = twistmatrix) #24,6,6,24
 
+if not np.all((np.array(twistmatrix) + np.array(twistmatrix).T) == 0):
+    print("Bad twist matrix!")
+    sys.exit()
+
+myLattice = Lattice([1,1,1,1], twistmatrix = twistmatrix) #24,6,6,24
+
+
+#observables for 1^4 lattice
 
 
 def create_saved_lattice():
@@ -27,15 +33,6 @@ def create_saved_lattice():
     with open("savedmomentum.pkl", "wb") as f:
         pickle.dump(lattice_config, f)
     return
-
-
-
-#x = myLattice.chain(1, 5, 50)
-
-
-
-
-
 
 def testchain(number_iterations, evolution_time, number_steps):
     starttime = time.time()
@@ -62,37 +59,30 @@ def testchain(number_iterations, evolution_time, number_steps):
     print("acceptance rate:", acceptances / number_iterations)
     return candidate
 
+import ast
+def plot_HMC_out():
+    with open("1cubesmalltime.txt", "r") as f:
+        loaded_list = f.read().splitlines()
+    truelist = []
+    for entry in loaded_list:
+        truelist.append(eval(entry, {"np": np}))
+    onetwodata = []
+    threefourdata = []
+    for list in truelist:
+        onetwodata.append(list[0][0][1])
+        threefourdata.append(list[0][5][1])
+    plt.figure()
+    onetwocounts, onetwoedges = np.histogram(onetwodata, bins = 50)
+    plt.bar(onetwoedges[:-1], onetwocounts, width = np.diff(onetwoedges))
+    plt.title("Holonomy of the 1-2 plaquette")
+    plt.figure()
+    threefourcounts, threefouredges = np.histogram(threefourdata, bins = 50)
+    plt.bar(threefouredges[:-1], threefourcounts, width = np.diff(threefouredges))
+    plt.title("Holonomy of the 3-4 plaquette")
+    plt.show()
 
 
-#create_saved_lattice()
-#testchain(1, 10, 100) #seem to get a ~60% acceptance rate with a dt of 0.003?!
+#plot_HMC_out()
+myLattice.chain(10000, 1, 400, observables=[plaquette_observable, winding_loop])
 
-myLattice = Lattice([2,2,2,2], twistmatrix = twistmatrix)
-momentum = myLattice.random_momentum()
-config = [myLattice.get_link_matrix_dict(), momentum]
-def dicts_equal(d1, d2, tol=True):
-    if d1.keys() != d2.keys():
-        print("Different keys:")
-        print("Only in d1:", d1.keys() - d2.keys())
-        print("Only in d2:", d2.keys() - d1.keys())
-        return False
-    cmp = np.allclose if tol else np.array_equal
-    equal = True
-    for k in d1:
-        if not cmp(d1[k], d2[k]):
-            print(f"Mismatch at key: {k}")
-            print("d1 value:", d1[k])
-            print("d2 value:", d2[k])
-            equal = False
-    return equal
-"""y, Vy = myLattice.momentum_update(config, 0.01)
-x, Vx = myLattice.vectorized_momentum_update(config, 0.01)
-y = y[1]
-x = x[1]
-print(dicts_equal(x,y))
 
-"""
-#print(dicts_equal(x,y))
-
-myLattice.chain(5, 10,400)
-plt.show()

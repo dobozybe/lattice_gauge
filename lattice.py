@@ -11,7 +11,7 @@ from sympy import LeviCivita
 import scipy.stats
 import scipy.linalg as linalg
 
-g = 1
+g = 0.1
 
 
 hamiltonian_list = []
@@ -391,7 +391,8 @@ class Lattice:  # ND torus lattice
                 loop_count += 1
                 action_sum += np.trace(self.B(plane[0], plane[1], node) * self.get_plaquette_holonomy(node.coordinates,
                                                                                                       plane))  # 2.2 of FDW paper
-        action = num_plaquettes - action_sum
+        action = 2 * num_plaquettes - action_sum
+        action = (2/g**2) * action
         if np.imag(action) > 0.0001:
             print("Warning: Action is Complex")
             return action
@@ -596,7 +597,7 @@ class Lattice:  # ND torus lattice
 
 
     def vectorized_momentum_update(self,initial_config,dt):
-        starttime = time.time()
+
         link_dict = initial_config[0]
         momentum_array = np.array(list(initial_config[1].values()))
         link_array = np.array(list(link_dict.values()))
@@ -609,31 +610,10 @@ class Lattice:  # ND torus lattice
         staple11, staple12, staple13 = np.split(firststaplematricies, 3, axis = 4)
         staple21, staple22, staple23 = np.split(secondstaplematricies, 3, axis=4)
 
-        if np.isnan(staple11).any():
-            print("NaNs in staple11")
-        if np.isnan(staple12).any():
-            print("NaNs in staple12")
-        if np.isnan(staple13).any():
-            print("NaNs in staple13")
-        if np.isnan(staple21).any():
-            print("NaNs in staple21")
-        if np.isnan(staple22).any():
-            print("NaNs in staple22")
-        if np.isnan(staple23).any():
-            print("NaNs in staple23")
-
         # calculate the twisted staple for each nu (index 2)
         firststaple = self.Barray[...,None,None] * staple11 @ staple12.conj().swapaxes(-1,-2) @ staple13.conj().swapaxes(-1,-2)
         secondstaple = self.V2_Barray[...,None, None] * staple21.conj().swapaxes(-1,-2) @ staple22.conj().swapaxes(-1,-2) @ staple23
 
-        if np.isnan(firststaple).any():
-            print("nan in firststaple")
-            if np.isnan(self.Barray[...,None,None]).any():
-                print("nan from B")
-        if np.isnan(secondstaple).any():
-            print("nan in secondstaple")
-            if np.isnan(self.V2_Barray[...,None,None]).any():
-                print("nan from BV2")
 
         #adding two terms together to get full staple then summing to get Vmu array. Squeeze to get rid of vestigal indicies
         staplesum = firststaple + secondstaple
@@ -649,7 +629,7 @@ class Lattice:  # ND torus lattice
 
         #new config
         new_config = [initial_config[0], dict(zip(initial_config[1].keys(), list(new_momentum_array)))]
-        print("elapsed", time.time()-starttime)
+        #print("elapsed", time.time()-starttime)
         return new_config
 
     #works but is slow as balls. Use vectorized whenever possible
@@ -704,14 +684,11 @@ class Lattice:  # ND torus lattice
 
 
     def evolution_step(self, config, dt):
-        #test_momentum_config = self.vectorized_momentum_update(config, dt)
-        #momentum_config = self.momentum_update(config, dt)
         momentum_config = self.vectorized_momentum_update(config, dt)
-        #print(dicts_equal(test_momentum_config[1], momentum_config[1]))
-
+        #momentum_config = self.momentum_update(config, dt)
         link_config = self.link_update(momentum_config, dt)
-        ham = self.hamiltonian(link_config)
-        hamiltonian_list.append(ham)
+        #ham = self.hamiltonian(link_config)
+        #hamiltonian_list.append(ham)
         #print("hamiltonian after step:", ham)
         return link_config
 
@@ -722,30 +699,30 @@ class Lattice:  # ND torus lattice
         ham = self.hamiltonian(config)
         hamiltonian_list.append(ham)
         print("initial Hamiltonian: ", ham)
-        #test_config = self.vectorized_momentum_update(config, dt/2)
+
         #config = self.momentum_update(config, dt/2)
         config = self.vectorized_momentum_update(config, dt / 2)
-        #print("First half step", dicts_equal(test_config[1], config[1]))
+
         config = self.link_update(config, dt)
         print("starting main evolution")
         for i in range(nsteps-1):
             #print("Evolution step:", i)
             config = self.evolution_step(config, dt)
-        #test_config = self.vectorized_momentum_update(config, dt/2)
+
         #config = self.momentum_update(config, dt/2)
         config = self.vectorized_momentum_update(config, dt / 2)
-        #print(dicts_equal(test_config[1], config[1]))
+
         print("Elapsed time for time evolution:", time.time() - starttime)
         ham = self.hamiltonian(config)
         print("Final Hamiltonian", ham)
         hamiltonian_list.append(ham)
-        plt.figure()
-        plt.plot(np.arange(0,nsteps+1, 1), hamiltonian_list, label = "energy")
-        plt.plot(np.arange(0, nsteps+1, 1), action_list, label = "action")
-        plt.plot(np.arange(0, nsteps+1, 1), momentum_list, label = "momentum")
-        plt.plot(np.arange(0, nsteps+1, 1)[1:], np.array(action_change_list)[1:]+np.array(momentum_change_list)[1:], label="changesum")
+        #plt.figure()
+        #plt.plot(np.arange(0,nsteps+1, 1), hamiltonian_list, label = "energy")
+        #plt.plot(np.arange(0, nsteps+1, 1), action_list, label = "action")
+        #plt.plot(np.arange(0, nsteps+1, 1), momentum_list, label = "momentum")
+        #plt.plot(np.arange(0, nsteps+1, 1)[1:], np.array(action_change_list)[1:]+np.array(momentum_change_list)[1:], label="changesum")
         #print(np.average(np.array(action_change_list)[1:]+np.array(momentum_change_list)[1:]) *nsteps)
-        plt.legend()
+        #plt.legend()
         return config
 
     def generate_candidate_configuration(self, current_configuration, evol_time, number_steps):
@@ -762,34 +739,6 @@ class Lattice:  # ND torus lattice
 
 
         # calculating action of configuration
-        """node_action_contribs = 0
-        for plane in self.planeslist:  # generate all plaquette holonomies
-            node_plaquette_corners = []
-            Blist = []
-            for node in self.real_nodearray:
-                node_plaquette_corners.append(self.get_plaquette_corners(node, plane))
-                Blist.append(self.B(plane[0], plane[1], node))
-            node_plaquette_corners = np.array(node_plaquette_corners).T
-            Blist = np.array(Blist)
-            first_link_matricies = np.array(
-                [link_matricies[plane[0]] for link_matricies in
-                 [filled_link_matricies_dict[node] for node in node_plaquette_corners[0]]])
-            second_link_matricies = np.array(
-                [link_matricies[plane[1]] for link_matricies in
-                 [filled_link_matricies_dict[node] for node in node_plaquette_corners[1]]])
-            third_link_matricies = np.array(
-                [link_matricies[plane[0]].conj().T for link_matricies in
-                 [filled_link_matricies_dict[node] for node in node_plaquette_corners[3]]])
-            fourth_link_matricies = np.array(
-                [link_matricies[plane[1]].conj().T for link_matricies in
-                 [filled_link_matricies_dict[node] for node in node_plaquette_corners[0]]])
-            # plane_holonomies: gives array of each matrix corresponding to the holonomy around a plaquette
-            # in list corresponding to posiiton of corner node in self.real_nodearray
-            plane_holonomies = Blist[:, np.newaxis, np.newaxis] * (
-            (first_link_matricies @ second_link_matricies @ third_link_matricies @ fourth_link_matricies))
-            node_action_contribs += np.sum(np.trace(plane_holonomies, axis1=1, axis2=2))
-        action =2 *(len(self.planeslist) * self.num_nodes - node_action_contribs)"""
-
         #action = self.get_config_action(filled_configuration)
         runningsum = 0
         for node in self.real_nodearray:
@@ -803,12 +752,14 @@ class Lattice:  # ND torus lattice
                         holonomy = node1 @ node2 @ node3 @ node4
                         runningsum += np.trace(np.matrix([[1,0],[0,1]]) - self.B(direction1, direction2, node) * holonomy)
         action = runningsum
+        action = (1/g**2) * action
 
         # calculating fictious momentum contribution
         dagmomen = np.conj(np.transpose(momentum_array, axes = (0,1,3,2)))
         momentum_contrib = 0.5 * np.trace(np.sum(momentum_array @ dagmomen, axis=(0,1)), axis1 = -1, axis2 = -2)
 
         # returning Hamiltonian value
+        #print("hailtonian function action:", action)
         hamiltonian = momentum_contrib + action
         if len(momentum_list)==0:
             momentum_change_list.append(momentum_contrib)
@@ -858,11 +809,12 @@ class Lattice:  # ND torus lattice
                 (first_link_matricies @ second_link_matricies @ third_link_matricies @ fourth_link_matricies))
             node_action_contribs += np.sum(np.trace(plane_holonomies, axis1=1, axis2=2))
 
-            node_action_contribs = (1/g**2) * node_action_contribs
-        action =  2 * (len(self.planeslist) * self.num_nodes - node_action_contribs)
+            node_action_contribs = node_action_contribs
+        action =  (2/g**2) * (len(self.planeslist) * self.num_nodes * 2 - node_action_contribs)
         return action
 
-    def accept_config(self, new_configuration, initial_configuration):
+    def accept_config(self, new_configuration, initial_configuration, observables = None):
+        observablelist = []
         print("initial Hamiltonian, Action")
         Hinitial = self.hamiltonian(initial_configuration)
         Ainitial = self.get_config_action(initial_configuration)
@@ -881,11 +833,13 @@ class Lattice:  # ND torus lattice
             for node in self.real_nodearray:
                 for direction in range(self.dimensions):
                     self.link_dict[node][direction].set_matrix(new_matrix_dict[node][direction])
-            return True
+            for observable in observables:
+                observablelist.append(observable(self))
+            return True, observablelist
         else:
-            return False
+            return False, None
 
-    def chain(self, number_iterations, evolution_time, number_steps):
+    def chain(self, number_iterations, evolution_time, number_steps, observables = None):
         global gork
         global hamiltonian_list
         global action_list
@@ -893,6 +847,7 @@ class Lattice:  # ND torus lattice
         global action_change_list
         global momentum_change_list
         starttime = time.time()
+        observable_list = []
         acceptances = 0
         momentum = self.random_momentum()
         #momentumvals = project(np.full(np.shape(np.array(list(momentum.values()))), 0j, dtype='complex128')) #action 175 momentum 85 issue issue
@@ -916,7 +871,9 @@ class Lattice:  # ND torus lattice
             candidate = self.generate_candidate_configuration(old_config, evolution_time, number_steps)
             #print(holder[0])
             old_config = [self.get_link_matrix_dict(), dict(zip(momentum.keys(),holder))]
-            if self.accept_config(candidate, old_config):
+            accepted = self.accept_config(candidate, old_config, observables = observables)
+            if True in accepted:
+                observable_list.append(accepted[1])
                 print("accepted")
                 acceptances+=1
             momentum = self.random_momentum()
@@ -928,7 +885,10 @@ class Lattice:  # ND torus lattice
         momentum_list = []
         momentum_change_list = []
         action_change_list = []
-
+        with open("new_observable_test.txt", "w") as f:
+            for item in observable_list:
+                f.write(f"{item}\n")
+        return observable_list
         #return gork
 
 
