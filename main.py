@@ -1,4 +1,3 @@
-import lattice
 from lattice import *
 from lattice import randomSU2
 import matplotlib.pyplot as plt
@@ -10,9 +9,11 @@ import pickle
 import time
 from observables import *
 
-##TODO: Better Hamiltonian Calculation for graph
+
+
 
 twistmatrix = [[0,1,0,0],[-1,0,0,0],[0,0,0,1],[0,0,-1,0]]
+
 
 
 if not np.all((np.array(twistmatrix) + np.array(twistmatrix).T) == 0):
@@ -22,8 +23,22 @@ if not np.all((np.array(twistmatrix) + np.array(twistmatrix).T) == 0):
 myLattice = Lattice([1,1,1,1], twistmatrix = twistmatrix) #24,6,6,24
 
 
-#observables for 1^4 lattice
+plaquette = One_Cube_Plaquette()
+windingGeneral = General_Winding([0,0,0,0])
+action = Action()
+topcharge = TopologicalCharge()
 
+
+
+#myLattice.chain(1000000, 1, 100, observables=[windingGeneral, action, plaquette], filename = "million_1hypercube_0.7g")
+
+#myLattice.cooling_measure(50, observables=[windingGeneral, action, plaquette, topcharge], filename="cooling_0.01")
+
+
+data = handle_observables("million_1hypercube_0.7g['genwinding[0, 0, 0, 0]', 'action', 'onecubeplaquette'][1, 1, 1, 1]_twists:[[0, 1], [2, 3]]", [plaquette, windingGeneral, action])
+plaquette.visualize(data)
+action.visualize(data)
+plt.show()
 
 def create_saved_lattice():
     myLattice = Lattice([3,3,3,3])
@@ -59,30 +74,26 @@ def testchain(number_iterations, evolution_time, number_steps):
     print("acceptance rate:", acceptances / number_iterations)
     return candidate
 
-import ast
-def plot_HMC_out():
-    with open("1cubesmalltime.txt", "r") as f:
-        loaded_list = f.read().splitlines()
-    truelist = []
-    for entry in loaded_list:
-        truelist.append(eval(entry, {"np": np}))
-    onetwodata = []
-    threefourdata = []
-    for list in truelist:
-        onetwodata.append(list[0][0][1])
-        threefourdata.append(list[0][5][1])
-    plt.figure()
-    onetwocounts, onetwoedges = np.histogram(onetwodata, bins = 50)
-    plt.bar(onetwoedges[:-1], onetwocounts, width = np.diff(onetwoedges))
-    plt.title("Holonomy of the 1-2 plaquette")
-    plt.figure()
-    threefourcounts, threefouredges = np.histogram(threefourdata, bins = 50)
-    plt.bar(threefouredges[:-1], threefourcounts, width = np.diff(threefouredges))
-    plt.title("Holonomy of the 3-4 plaquette")
-    plt.show()
+def cool_measure(iterations, observables, log =True, filename = None):
+    observable_list = []
+    lattice_shape = [4,4,4,4]
+    for i in range(iterations):
+        observable_dict = {}
+        thisLattice = Lattice(lattice_shape, twistmatrix=twistmatrix)
+        thisLattice.action_min_sweep(1000)
+        for observable in observables:
+            observable_dict[observable.identifier] = tuple(observable.evaluate(thisLattice))
+        observable_list.append(observable_dict)
+    if (log == True or filename != None):
+        if filename != None:
+            with open("Cooling " + filename + str([obs.identifier for obs in observables]) + str(lattice_shape) + ".txt", "w") as f:
+                for item in observable_list:
+                    f.write(f"{item}\n")
+        else:
+            with open("Cooling " + str(time.strftime("%d-%m-%Y_%H:%M:%S")) + str([obs.identifier for obs in observables]) + str(
+                    lattice_shape) + ".txt", "w") as f:
+                for item in observable_list:
+                    f.write(f"{item}\n")
 
-
-#plot_HMC_out()
-myLattice.chain(10000, 1, 400, observables=[plaquette_observable, winding_loop])
 
 

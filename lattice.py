@@ -10,8 +10,12 @@ import pickle
 from sympy import LeviCivita
 import scipy.stats
 import scipy.linalg as linalg
+from numba import njit
 
-g = 0.1
+
+
+
+g = 0.7
 
 
 hamiltonian_list = []
@@ -51,9 +55,13 @@ lie_gens = np.stack([ #i sigma_n where sigma_i are the paulis.
 
 
 def su2_exp(matrixarray):
-    param1 = np.trace(matrixarray @ lie_gens[0].conj().T, axis1=1, axis2=2)/2
-    param2 = np.trace(matrixarray @ lie_gens[1].conj().T, axis1=1, axis2=2)/2
-    param3 = np.trace(matrixarray @ lie_gens[2].conj().T, axis1=1, axis2=2)/2
+    gen0 = np.broadcast_to(lie_gens[0].conj().T, matrixarray.shape)
+    gen1 = np.broadcast_to(lie_gens[1].conj().T, matrixarray.shape)
+    gen2 = np.broadcast_to(lie_gens[2].conj().T, matrixarray.shape)
+    param1 = np.trace(matrixarray @ gen0, axis1=1, axis2=2)/2
+    param2 = np.trace(matrixarray @ gen1, axis1=1, axis2=2)/2
+    param3 = np.trace(matrixarray @ gen2, axis1=1, axis2=2)/2
+
     paramarray = np.stack([param1, param2, param3]).T
     normparams = np.sqrt(param1 ** 2 + param2 ** 2 + param3 ** 2)
     if np.max(np.imag(normparams))*(g**2) > 0.01:
@@ -98,16 +106,21 @@ def randomSU2():
     return matrix
 
 
-def inSU2(matrix):
-    determinant1 = (np.round(np.linalg.det(matrix), 10) == np.float64(1))
-    unitary = np.array_equal(np.round(matrix @ np.transpose(matrix.conj(), axes=(0,2,1)), 10), np.diag(np.full(2, 1, dtype = complex)))
-    return determinant1 and unitary
+def inSU2(matrix, tol=1e-10):
+    det_close = np.allclose(np.linalg.det(matrix), 1.0, atol=tol)
+    unitary = np.allclose(matrix @ matrix.conj().T, np.eye(2), atol=tol)
+    return det_close and unitary
 
 
 def project(matrixarray):
     antisym = (matrixarray - np.transpose(matrixarray.conj(), axes=(*range(matrixarray.ndim - 2), -1, -2)))
     return (1 / 2) * antisym - (1 / 4) * np.trace(antisym, axis1 = -2, axis2 = -1)[...,np.newaxis, np.newaxis] * np.array([[1, 0], [0, 1]])
 class Lattice:  # ND torus lattice
+
+
+    """INITIALIZATION METHODS"""
+
+
     def __init__(self, shape, filename=None, twistmatrix=None):
         # dimensions should be an nd numpy array with each entry corresponding to the size of the array.
         # t should be the first dimension
@@ -119,8 +132,14 @@ class Lattice:  # ND torus lattice
         self.plaquette_corner_dict = {}
         self.v_second_plaquette_corner_dict = {}
         self.twistmatrix = np.zeros((len(shape), len(shape)))
-        if twistmatrix != None:
+        if twistmatrix is not None:
             self.twistmatrix = twistmatrix
+        self.twists = []
+        for i in range(np.shape(self.twistmatrix)[0]):
+            for j in range(np.shape(self.twistmatrix)[1]):
+                if j>i and self.twistmatrix[i][j] ==1:
+                    self.twists.append([i,j])
+
         self.paddedshape = []
         self.planeslist = []
 
@@ -317,6 +336,9 @@ class Lattice:  # ND torus lattice
         with open(filename + ".pickle", "wb") as datafile:
             pickle.dump(matrixdict, datafile, protocol=pickle.HIGHEST_PROTOCOL)
 
+
+    """UTILITY METHODS"""
+
     def get_link_matrix_dict(self):  # returns only non-ghost link matricies
         matrix_dict = {}
         for node in self.real_nodearray:
@@ -398,13 +420,48 @@ class Lattice:  # ND torus lattice
             return action
         return np.real(action)
 
-    def minimize_link_action(self, link):
+    def ghost_fill_configuration(self, configuration):
+        link_dict = configuration[0]
+        momentum_dict = configuration[1]
+        filled_link_dict = link_dict.copy()
+        filled_momentum_dict = momentum_dict.copy()
+        for node in self.ghost_nodearray:
+            linkholder = []
+            momentumholder = []
+            for i in range(self.dimensions):
+                if not node.ghost_node[i]:
+                    linkholder.append(link_dict[node.get_link(i, 0).parent_link.node1][
+                                          i])  # I've already done the math about which links should be identified
+                    momentumholder.append(momentum_dict[node.get_link(i, 0).parent_link.node1][
+                                              i])
+                else:
+                    linkholder.append(np.array([[None, None], [None,
+                                                               None]]))  # none array should never be involved in any calculation but should crash if it somehow is.
+                    momentumholder.append(np.array([[None, None], [None,
+                                                                   None]]))
+            filled_link_dict[node] = linkholder
+            filled_momentum_dict[node] = momentumholder
+        new_config = [filled_link_dict, filled_momentum_dict]
+        return new_config
+
+    def measure_observables(self,observables):
+        observable_dict = {}
+        for observable in observables:
+            observable_dict[observable.identifier] = tuple(observable.evaluate(self))
+        return observable_dict
+
+
+
+    """COOLING METHODS"""
+
+    def minimize_link_action(self, link): #doesn't work for theoretical reasons for a 1x1x1x1 lattice!
         """Find all plaquettes the link contributes to"""
         Vdagsum = np.full((2, 2), 0 + 0j)  # for SU(2)
         # print("Start action:", start_action)
         for plane in self.planeslist:
             if link.direction in plane:
-                this_plane = plane.copy()
+                #this_plane = plane.copy()
+                this_plane = [plane[0],plane[1]]
                 link_direction = link.direction
                 this_plane.remove(link_direction)
                 orthogonal_direction = this_plane[0]  # gives direction in plane orthogonal to link
@@ -413,31 +470,35 @@ class Lattice:  # ND torus lattice
                                                  -1)  # other node whose plaquette in that plane will contain that link
                 # This logic is good (checked thrice)
                 Vdagmatrix_node = (self.B(plane[0], plane[1], node) * self.translate(node, link_direction, 1).get_link(
-                    orthogonal_direction, 0).get_matrix()
+                    orthogonal_direction, 0).get_matrix()\
                                    @ self.translate(node, orthogonal_direction, 1).get_link(link_direction,
-                                                                                            0).get_matrix().conj().T
+                                                                                            0).get_matrix().conj().T\
                                    @ node.get_link(orthogonal_direction,
                                                    0).get_matrix().conj().T)  # formula worked out in notebook (twice. This is verified).
-                Vdagmatrix_complement = (
+                """Vdagmatrix_complement = (
                             np.conjugate(self.B(plane[0], plane[1], complement_node)) * self.translate(complement_node,
                                                                                                        link_direction,
                                                                                                        1).get_link(
                         orthogonal_direction, 0).get_matrix().conj().T
                             @ complement_node.get_link(link_direction, 0).get_matrix().conj().T
                             @ complement_node.get_link(orthogonal_direction, 0).get_matrix()
-                            )
+                            )"""
+                Vdagmatrix_complement = self.B(plane[0],plane[1], complement_node) *self.translate(self.translate(node, link_direction, 1), orthogonal_direction, -1).get_link(orthogonal_direction, 0).get_matrix().conj().T\
+                                        @ complement_node.get_link(link_direction, 0).get_matrix().conj().T\
+                                        @ complement_node.get_link(orthogonal_direction, 0).get_matrix()
+
                 Vdagsum += Vdagmatrix_node
                 Vdagsum += Vdagmatrix_complement
         Vdagsum[0][1] = -np.conj(Vdagsum[1][
                                      0])  # correcting entries of Vdagsum so that it doesn't drift from a real number times an SU2 matrix
         Vdagsum[1][1] = np.conj(Vdagsum[0][0])
         rsquared = np.real(np.linalg.det(Vdagsum))
-        original_contrib = -np.trace(
+        original_contrib = -(2/g**2) * np.trace(
             link.get_matrix() @ Vdagsum)  # trace (U times vdag) is the original contribution to the action
 
         Wdag = Vdagsum / (np.sqrt(
             rsquared))  # since Wdag = Vsum/r, r = sqrt(det(Vsum)) (since det(Wdag = 1)). Then we can get Wdag from Vsum.
-        new_contrib = - 2 * np.sqrt(rsquared)  # should be equal to -2r
+        new_contrib = - (4/g**2) * np.sqrt(rsquared)  # should be equal to -2r
         # print("calculated:", new_contrib, " should be:", -2*np.sqrt(rsquared))
         """if not inSU2(Wdag):
             print("Warning! No longer in SU(2)!")
@@ -445,9 +506,9 @@ class Lattice:  # ND torus lattice
         link.set_matrix(
             Wdag.conj().T)  # set the matrix of our link to the dagger of Wdag. This should minimize this link's contribution to the action per FDW paper.
         # It should also deal with the reverse link matrix (since the link *is* the reverse link)
-        if link.student_links != []:  # update the student if there is one
+        """if link.student_links != []:  # update the student if there is one
             for student_link in link.student_links:
-                student_link.update()
+                student_link.update()"""
         action_delta = new_contrib - original_contrib
         return np.real(action_delta)
 
@@ -488,7 +549,7 @@ class Lattice:  # ND torus lattice
             print("Calculated action after sweep:", actionlist[i + 1])
         plt.plot(actionlist, marker="o", linestyle="")
         print("total time:", time.time() - start_time)
-        plt.show()
+        #plt.show()
         return actionlist
 
     def action_density_plot(self, plane,
@@ -519,6 +580,26 @@ class Lattice:  # ND torus lattice
         plt.title("Action Density in the " + str(plane) + " plane, with " + titlestring)
         plt.show()
 
+    def cooling_measure(self, iterations, observables, coolingsteps = 1000, log=True, filename=None):
+        observable_list = []
+
+        for i in range(iterations):
+            self.action_min_sweep(coolingsteps)
+            observable_list.append(self.measure_observables(observables))
+            self.__init__(self.shape, twistmatrix=self.twistmatrix)
+
+        if (log == True or filename != None):
+            if filename != None:
+                with open("Cooling " + filename + str([obs.identifier for obs in observables]) + str(
+                        self.shape) + ".txt", "w") as f:
+                    for item in observable_list:
+                        f.write(f"{item}\n")
+            else:
+                with open("Cooling " + str(time.strftime("%d-%m-%Y_%H:%M:%S")) + str(
+                        [obs.identifier for obs in observables]) + str(
+                        self.shape) + ".txt", "w") as f:
+                    for item in observable_list:
+                        f.write(f"{item}\n")
     def get_topological_charge(self):
         runningsum = 0
         indicies = [[i, j, k, l] for i in range(3) for j in range(3) for k in range(3) for l in range(3)]
@@ -534,36 +615,14 @@ class Lattice:  # ND torus lattice
                 runningsum += contribution
         return -1 / (32 * np.pi ** 2) * runningsum
 
-    """Hybrid Monte Carlo functions. 
+    """HYBRID MONTE CARLO FUNCTIONS. 
     Will repeatedly use variable name "configuration" to represent a pair
      [link variable matrix dict, computer momentum dict]. It's important that the first entry
      is link variable matricies, and not the link variable objects themselves so we don't reset them
      during time evolution. Dicts are formatted as dict[node] = [list of matricies indexed by direction] Dictionaries only contain real nodes, there's a method to ghost fill dictionaries when
      necessary."""
 
-    def ghost_fill_configuration(self, configuration):
-        link_dict = configuration[0]
-        momentum_dict = configuration[1]
-        filled_link_dict = link_dict.copy()
-        filled_momentum_dict = momentum_dict.copy()
-        for node in self.ghost_nodearray:
-            linkholder = []
-            momentumholder = []
-            for i in range(self.dimensions):
-                if not node.ghost_node[i]:
-                    linkholder.append(link_dict[node.get_link(i, 0).parent_link.node1][
-                                          i])  # I've already done the math about which links should be identified
-                    momentumholder.append(momentum_dict[node.get_link(i, 0).parent_link.node1][
-                                              i])
-                else:
-                    linkholder.append(np.array([[None, None], [None,
-                                                               None]]))  # none array should never be involved in any calculation but should crash if it somehow is.
-                    momentumholder.append(np.array([[None, None], [None,
-                                                                   None]]))
-            filled_link_dict[node] = linkholder
-            filled_momentum_dict[node] = momentumholder
-        new_config = [filled_link_dict, filled_momentum_dict]
-        return new_config
+
 
     def random_momentum(self):
         new_momentum_dict = {}
@@ -698,13 +757,13 @@ class Lattice:  # ND torus lattice
         dt = evolution_time / nsteps
         ham = self.hamiltonian(config)
         hamiltonian_list.append(ham)
-        print("initial Hamiltonian: ", ham)
+        #print("initial Hamiltonian: ", ham)
 
         #config = self.momentum_update(config, dt/2)
         config = self.vectorized_momentum_update(config, dt / 2)
 
         config = self.link_update(config, dt)
-        print("starting main evolution")
+        #print("starting main evolution")
         for i in range(nsteps-1):
             #print("Evolution step:", i)
             config = self.evolution_step(config, dt)
@@ -714,7 +773,7 @@ class Lattice:  # ND torus lattice
 
         print("Elapsed time for time evolution:", time.time() - starttime)
         ham = self.hamiltonian(config)
-        print("Final Hamiltonian", ham)
+        #print("Final Hamiltonian", ham)
         hamiltonian_list.append(ham)
         #plt.figure()
         #plt.plot(np.arange(0,nsteps+1, 1), hamiltonian_list, label = "energy")
@@ -815,31 +874,36 @@ class Lattice:  # ND torus lattice
 
     def accept_config(self, new_configuration, initial_configuration, observables = None):
         observablelist = []
-        print("initial Hamiltonian, Action")
+        #print("initial Hamiltonian, Action")
         Hinitial = self.hamiltonian(initial_configuration)
         Ainitial = self.get_config_action(initial_configuration)
-        print(Hinitial, Ainitial)
-        print("final Hamiltonian, action")
+        #print(Hinitial, Ainitial)
+
+        print("action:", Ainitial)
+        #print("final Hamiltonian, action")
         Hnew = self.hamiltonian(new_configuration)
-        Anew = self.get_config_action(new_configuration)
-        print(Hnew, Anew)
+        #print(Hnew, Anew)
         difference = Hnew - Hinitial
         transition_prob = np.minimum(1, np.exp(-difference))
         randomvar = random.uniform(0, 1)
-        print("Hamiltonian difference:", difference, "Configuration transition probability:", transition_prob)
+        #print("Hamiltonian difference:", difference, "Configuration transition probability:", transition_prob)
         #print("Hamiltonian difference over initial Hamiltonian:", np.abs(difference/Hinitial))
         if randomvar < transition_prob:
+            observable_dict = {}
             new_matrix_dict = dict(zip(self.real_nodearray, new_configuration[0].values()))
             for node in self.real_nodearray:
                 for direction in range(self.dimensions):
                     self.link_dict[node][direction].set_matrix(new_matrix_dict[node][direction])
-            for observable in observables:
-                observablelist.append(observable(self))
-            return True, observablelist
+            if observables!= None:
+                for observable in observables:
+                    observable_dict[observable.identifier] = tuple(observable.evaluate(self))
+                return True, observable_dict
+            else:
+                return True, None
         else:
             return False, None
 
-    def chain(self, number_iterations, evolution_time, number_steps, observables = None):
+    def chain(self, number_iterations, evolution_time, number_steps, observables = None, filename = None, log = False):
         global gork
         global hamiltonian_list
         global action_list
@@ -850,9 +914,8 @@ class Lattice:  # ND torus lattice
         observable_list = []
         acceptances = 0
         momentum = self.random_momentum()
-        #momentumvals = project(np.full(np.shape(np.array(list(momentum.values()))), 0j, dtype='complex128')) #action 175 momentum 85 issue issue
-        #momentum = dict(zip(momentum.keys(),momentumvals))
         for i in range(number_iterations):
+            print("Iteration:", i)
             hamiltonian_list = []
             action_list = []
             momentum_list = []
@@ -864,16 +927,14 @@ class Lattice:  # ND torus lattice
                 for array in arraylist:
                     newlist.append(array.copy())
                 holder.append(newlist)
-             #momentumlist is changing the array objects in memory in holder, since copying momentum doesn't change that you're copying a list of specific objects in memory
-            #think fixed
             #print(holder[0])
             old_config = [self.get_link_matrix_dict(), momentum.copy()]
             candidate = self.generate_candidate_configuration(old_config, evolution_time, number_steps)
             #print(holder[0])
             old_config = [self.get_link_matrix_dict(), dict(zip(momentum.keys(),holder))]
-            accepted = self.accept_config(candidate, old_config, observables = observables)
-            if True in accepted:
-                observable_list.append(accepted[1])
+            accepted, data = self.accept_config(candidate, old_config, observables = observables)
+            if accepted==True:
+                observable_list.append(data)
                 print("accepted")
                 acceptances+=1
             momentum = self.random_momentum()
@@ -885,11 +946,18 @@ class Lattice:  # ND torus lattice
         momentum_list = []
         momentum_change_list = []
         action_change_list = []
-        with open("new_observable_test.txt", "w") as f:
-            for item in observable_list:
-                f.write(f"{item}\n")
+        #save the measured observables
+        if (log == True or filename!=None):
+            if filename!=None:
+                with open(filename + str([obs.identifier for obs in observables]) + str(self.shape) + "_twists:" + str(self.twists) + ".txt", "w") as f:
+                    for item in observable_list:
+                        f.write(f"{item}\n")
+            else:
+                with open(str(time.strftime("%d-%m-%Y_%H:%M:%S")) + str([obs.identifier for obs in observables]) + str(self.shape) + "_twists:" + str(self.twists) +".txt", "w") as f:
+                    for item in observable_list:
+                        f.write(f"{item}\n")
         return observable_list
-        #return gork
+
 
 
 
