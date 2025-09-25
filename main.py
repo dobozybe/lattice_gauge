@@ -8,11 +8,11 @@ import cProfile
 import pickle
 import time
 from observables import *
+import multiprocessing
+import os
 
 
-
-
-twistmatrix = [[0,1,0,0],[-1,0,0,0],[0,0,0,1],[0,0,-1,0]]
+twistmatrix = [[0,1,0,0],[-1,0,0,0],[0,0,0,0],[0,0,0,0]]
 
 
 
@@ -20,7 +20,7 @@ if not np.all((np.array(twistmatrix) + np.array(twistmatrix).T) == 0):
     print("Bad twist matrix!")
     sys.exit()
 
-myLattice = Lattice([1,1,1,1], twistmatrix = twistmatrix) #24,6,6,24
+myLattice = Lattice([3,3,3,3], twistmatrix = twistmatrix) #24,6,6,24
 
 
 plaquette = One_Cube_Plaquette()
@@ -30,15 +30,14 @@ topcharge = TopologicalCharge()
 
 
 
-#myLattice.chain(1000000, 1, 100, observables=[windingGeneral, action, plaquette], filename = "million_1hypercube_0.7g")
+myLattice.parallel_chain(1000, 1, 1000, observables=[windingGeneral, action, topcharge], log = True)
 
-#myLattice.cooling_measure(50, observables=[windingGeneral, action, plaquette, topcharge], filename="cooling_0.01")
+"""data = handle_observables("1plaquette_data/million_1hypercube_0.5g['genwinding[0, 0, 0, 0]', 'action', 'onecubeplaquette'][1, 1, 1, 1]_twists:[[0, 1], [2, 3]]", [action, plaquette, windingGeneral])
 
-
-data = handle_observables("million_1hypercube_0.7g['genwinding[0, 0, 0, 0]', 'action', 'onecubeplaquette'][1, 1, 1, 1]_twists:[[0, 1], [2, 3]]", [plaquette, windingGeneral, action])
-plaquette.visualize(data)
 action.visualize(data)
-plt.show()
+plaquette.visualize(data)
+windingGeneral.visualize(data)
+plt.show()"""
 
 def create_saved_lattice():
     myLattice = Lattice([3,3,3,3])

@@ -1,21 +1,17 @@
-import functools
-
 import numpy as np
 from node_links import *
 import random
 import matplotlib.pyplot as plt
 import time
-import shelve
 import pickle
 from sympy import LeviCivita
-import scipy.stats
-import scipy.linalg as linalg
-from numba import njit
+from pathos.multiprocessing import ProcessingPool as Pool
+from functools import partial
 
 
 
 
-g = 0.7
+g = 0.01
 
 
 hamiltonian_list = []
@@ -24,7 +20,7 @@ momentum_list = []
 momentum_change_list=[]
 action_change_list=[]
 
-global gork
+
 
 def dicts_equal(d1, d2, tol=True):
     if d1.keys() != d2.keys():
@@ -128,7 +124,7 @@ class Lattice:  # ND torus lattice
         self.SUN_dimension = 2
         self.shape = shape
         self.filename = filename
-
+        self.processes = 8
         self.plaquette_corner_dict = {}
         self.v_second_plaquette_corner_dict = {}
         self.twistmatrix = np.zeros((len(shape), len(shape)))
@@ -450,6 +446,13 @@ class Lattice:  # ND torus lattice
             observable_dict[observable.identifier] = tuple(observable.evaluate(self))
         return observable_dict
 
+    """UTILITY FOR PICKLING"""
+
+    def __getstate__(self):
+        return {"shape":self.shape, "twists":self.twistmatrix}
+
+    def __setstate__(self, state):
+        self.__init__(state["shape"], twistmatrix = state["twistmatrix"])
 
 
     """COOLING METHODS"""
@@ -655,6 +658,26 @@ class Lattice:  # ND torus lattice
         return new_config
 
 
+
+    def single_node_momentum_update(self, config, dt, node):
+        new_matrix_list = range(self.dimensions)
+        link_dict = config[0]
+        momentum_dict = config[1]
+        node_momenta = momentum_dict[node]
+        node_index = np.where(self.real_nodearray == node)
+        for mu in range(self.dimensions):
+            Vmu =0
+            for nu in range(self.dimensions):
+                if mu != nu:
+                    staple_links = self.staple_array[node_index, mu, nu]
+                    Bval = self.B(mu, nu, node)
+                    first_staple = staple_links[0][0].get_matrix() @ staple_links[0][1].get_matrix().conj().T @ staple_links[0][2].get_matrix().conj().T
+                    second_staple = staple_links[1][0].get_matrix().conj().T @ staple_links[1][1].get_matrix().conj().T @  staple_links[1][2].get_matrix()
+                    Vmu += first_staple + Bval * second_staple
+            stapleterm = link_dict[node][mu].get_matrix() @ Vmu
+            momentum_change = (1/g**2) * (stapleterm.conj().T - stapleterm) * dt
+            new_matrix_list[mu] = node_momenta[mu] + momentum_change
+        return {node:tuple(new_matrix_list)}
     def vectorized_momentum_update(self,initial_config,dt):
 
         link_dict = initial_config[0]
@@ -690,6 +713,24 @@ class Lattice:  # ND torus lattice
         new_config = [initial_config[0], dict(zip(initial_config[1].keys(), list(new_momentum_array)))]
         #print("elapsed", time.time()-starttime)
         return new_config
+
+
+
+
+    def parallel_momentum_update(self, initial_config, dt):
+        processes = self.processes
+        new_momentum_dict = {}
+        helper = partial(self.single_node_momentum_update, initial_config, dt)
+        with Pool(processes) as pool:
+            dictlist = pool.map(helper, self.real_nodearray)
+        for dict in dictlist:
+            new_momentum_dict.update(dict)
+        final_config = [initial_config[0], new_momentum_dict]
+        return final_config
+
+
+
+
 
     #works but is slow as balls. Use vectorized whenever possible
     def momentum_update(self, initial_config, dt):  # sends momentum at n*dt - dt/2 to n * dt + dt/2
@@ -751,12 +792,17 @@ class Lattice:  # ND torus lattice
         #print("hamiltonian after step:", ham)
         return link_config
 
+    def parallel_evolution_step(self, config, dt):
+        momentum_config = self.parallel_momentum_update(config, dt)
+        link_config = self.link_update(momentum_config, dt)
+        return link_config
+
     def time_evolve(self, initial_config, evolution_time, nsteps=10000):
         starttime = time.time()
         config = initial_config
         dt = evolution_time / nsteps
-        ham = self.hamiltonian(config)
-        hamiltonian_list.append(ham)
+        #ham = self.hamiltonian(config)
+        #hamiltonian_list.append(ham)
         #print("initial Hamiltonian: ", ham)
 
         #config = self.momentum_update(config, dt/2)
@@ -772,9 +818,9 @@ class Lattice:  # ND torus lattice
         config = self.vectorized_momentum_update(config, dt / 2)
 
         print("Elapsed time for time evolution:", time.time() - starttime)
-        ham = self.hamiltonian(config)
+        #ham = self.hamiltonian(config)
         #print("Final Hamiltonian", ham)
-        hamiltonian_list.append(ham)
+        #hamiltonian_list.append(ham)
         #plt.figure()
         #plt.plot(np.arange(0,nsteps+1, 1), hamiltonian_list, label = "energy")
         #plt.plot(np.arange(0, nsteps+1, 1), action_list, label = "action")
@@ -784,9 +830,35 @@ class Lattice:  # ND torus lattice
         #plt.legend()
         return config
 
+
+
+    def parallel_time_evolve(self, initial_config, evolution_time, nsteps=10000):
+        starttime = time.time()
+        config = initial_config
+        dt = evolution_time / nsteps
+
+
+        config = self.parallel_momentum_update(config, dt / 2)
+
+        config = self.link_update(config, dt)
+
+        for i in range(nsteps-1):
+            config = self.parallel_evolution_step(config, dt)
+
+        config = self.parallel_momentum_update(config, dt / 2)
+
+        print("Elapsed time for time evolution:", time.time() - starttime)
+
+        return config
+
     def generate_candidate_configuration(self, current_configuration, evol_time, number_steps):
         new_configuration = self.time_evolve(current_configuration, evol_time, nsteps = number_steps)
         return new_configuration
+
+    def parallel_generate_candidate_configuration(self, current_configuration, evol_time, number_steps):
+        new_configuration = self.parallel_time_evolve(current_configuration, evol_time, nsteps = number_steps)
+        return new_configuration
+
 
     def hamiltonian(self, configuration): #action: sum(nodes in lattice) sum(mu < nu) Tr(1 - B_{mu nu}(n) U_{mu nu}(n))
         momentum_dict = configuration[1]
@@ -904,12 +976,11 @@ class Lattice:  # ND torus lattice
             return False, None
 
     def chain(self, number_iterations, evolution_time, number_steps, observables = None, filename = None, log = False):
-        global gork
-        global hamiltonian_list
+        """global hamiltonian_list
         global action_list
         global momentum_list
         global action_change_list
-        global momentum_change_list
+        global momentum_change_list"""
         starttime = time.time()
         observable_list = []
         acceptances = 0
@@ -946,6 +1017,44 @@ class Lattice:  # ND torus lattice
         momentum_list = []
         momentum_change_list = []
         action_change_list = []
+        #save the measured observables
+        if (log == True or filename!=None):
+            if filename!=None:
+                with open(filename + str([obs.identifier for obs in observables]) + str(self.shape) + "_twists:" + str(self.twists) + ".txt", "w") as f:
+                    for item in observable_list:
+                        f.write(f"{item}\n")
+            else:
+                with open(str(time.strftime("%d-%m-%Y_%H:%M:%S")) + str([obs.identifier for obs in observables]) + str(self.shape) + "_twists:" + str(self.twists) +".txt", "w") as f:
+                    for item in observable_list:
+                        f.write(f"{item}\n")
+        return observable_list
+
+
+    def parallel_chain(self, number_iterations, evolution_time, number_steps, observables = None, filename = None, log = False):
+        starttime = time.time()
+        observable_list = []
+        acceptances = 0
+        momentum = self.random_momentum()
+        for i in range(number_iterations):
+            print("Iteration:", i)
+            holder = []
+            for arraylist in list(momentum.values()):
+                newlist = []
+                for array in arraylist:
+                    newlist.append(array.copy())
+                holder.append(newlist)
+            old_config = [self.get_link_matrix_dict(), momentum.copy()]
+            candidate = self.parallel_generate_candidate_configuration(old_config, evolution_time, number_steps)
+            old_config = [self.get_link_matrix_dict(), dict(zip(momentum.keys(),holder))]
+            accepted, data = self.accept_config(candidate, old_config, observables = observables)
+            if accepted==True:
+                observable_list.append(data)
+                print("accepted")
+                acceptances+=1
+            momentum = self.random_momentum()
+        print("Avg time per config: ", (time.time()-starttime)/number_iterations)
+        print("acceptance rate:", acceptances/number_iterations)
+
         #save the measured observables
         if (log == True or filename!=None):
             if filename!=None:
