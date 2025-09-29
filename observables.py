@@ -97,7 +97,7 @@ class General_Winding(Observable):
         for direction in range(lattice.dimensions):
             currentnode = lattice[self.basenodecoords]
             for i in range(shape[direction]):
-                productarray[direction] = linkdicts[currentnode][direction] @ productarray[direction]
+                productarray[direction] = linkdicts[currentnode.tuplecoords][direction] @ productarray[direction]
                 currentnode = lattice.translate(currentnode, direction, 1)
         holonomyarray = 0.5 * np.trace(productarray, axis1= 1, axis2 = 2)
         for direction in range(lattice.dimensions):

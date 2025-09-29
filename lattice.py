@@ -5,13 +5,14 @@ import matplotlib.pyplot as plt
 import time
 import pickle
 from sympy import LeviCivita
-from pathos.multiprocessing import ProcessingPool as Pool
+import multiprocessing.dummy as mp
 from functools import partial
+import itertools
 
 
 
 
-g = 0.01
+g = 1
 
 
 hamiltonian_list = []
@@ -111,6 +112,76 @@ def inSU2(matrix, tol=1e-10):
 def project(matrixarray):
     antisym = (matrixarray - np.transpose(matrixarray.conj(), axes=(*range(matrixarray.ndim - 2), -1, -2)))
     return (1 / 2) * antisym - (1 / 4) * np.trace(antisym, axis1 = -2, axis2 = -1)[...,np.newaxis, np.newaxis] * np.array([[1, 0], [0, 1]])
+
+def _momentum_update_helper(config, dt, coordinates, dimensions, Bdict, V2Bdict, staple_dict):
+    new_matrix_list = list(range(dimensions)) #creates a list with the right number of indicies
+    link_dict = config[0]
+    momentum_dict = config[1]
+    node_momenta = momentum_dict[coordinates]
+    for mu in range(dimensions):
+        Vmu =0
+        for nu in range(dimensions):
+            if mu != nu:
+                staple_links = staple_dict[(coordinates, mu,nu)]
+                Bval = Bdict[coordinates, (mu, nu)]
+                V2Bval = V2Bdict[coordinates, (mu, nu)]
+                first_staple = Bval * staple_links[0][0] @ staple_links[0][1].conj().T @ staple_links[0][2].conj().T
+                second_staple = V2Bval * staple_links[1][0].conj().T @ staple_links[1][1].conj().T @  staple_links[1][2]
+                Vmu +=first_staple + second_staple
+        stapleterm = link_dict[coordinates][mu] @ Vmu
+        momentum_change = (1/g**2) * (stapleterm.conj().T - stapleterm) * dt
+        new_matrix_list[mu] = node_momenta[mu] + momentum_change
+    return {coordinates:tuple(new_matrix_list)}
+
+def carg_momentum_update_helper(config, dt, coordinates, dimensions, Bdict, V2Bdict,
+                        staple_dict):  # sends momentum at n*dt - dt/2 to n * dt + dt/2
+    starttime = time.time()
+    momentum_dict = config[1].copy()
+    link_dict = config[0]
+    link_array = np.transpose(np.array(list(config[0].values())), axes=[1, 0, 3, 2])
+
+    # link matricies dicts have indicies [direction, plane, node, matrix]
+
+    # do it slowly to make sure you're implementing EOM correctly. This conserves energy it's just slow as shit
+    old_momentum_list = momentum_dict[coordinates].copy()
+    for direction in range(dimensions):
+        Vfirst = 0
+        Vsecond = 0
+        for sum_direction in range(dimensions):
+            if sum_direction != direction:
+                staple_links = staple_dict[(coordinates, direction,sum_direction)]
+                Vfirst += Bdict[coordinates, (direction, sum_direction)] * staple_links[0][0] @ staple_links[0][
+                    1].conj().T @ staple_links[0][2].conj().T
+
+                Vsecond += V2Bdict[coordinates, (direction, sum_direction)] * staple_links[1][0].conj().T @ \
+                           staple_links[1][1].conj().T @ staple_links[1][2]
+
+        Vdirection = Vfirst + Vsecond
+        momentum_change = (1 / g ** 2) * (
+                    Vdirection.conj().T @ link_dict[coordinates][direction].conj().T - link_dict[coordinates][
+                direction] @ Vdirection)
+
+        old_momentum_list[direction] += momentum_change * dt
+
+    return {coordinates: old_momentum_list}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 class Lattice:  # ND torus lattice
 
 
@@ -140,6 +211,7 @@ class Lattice:  # ND torus lattice
         self.planeslist = []
 
         self.indexdict = {}
+        self.index_lookup_dict = {}
         self.Bdict = {}
         self.V2_Bdict = {}
         self.link_dict = {}
@@ -159,12 +231,13 @@ class Lattice:  # ND torus lattice
         self.real_nodearray = []  # np array of nodes that aren't ghost nodes
         self.ghost_nodearray = []
         tuplelist = []
-        self.make_tuples(np.zeros(len(shape)), self.paddedshape, tuplelist)
+        self.make_tuples(np.zeros(len(shape), dtype=int), self.paddedshape, tuplelist)
 
         for coordinates in tuplelist:  # initialize nodes and add them to nodelist
             self.nodelist.append(Node(coordinates, is_ghost_node=[self.is_boundary(coordinates, i) for i in range(
                 self.dimensions)]))  # loops will ignore ghost nodes. If it's on the boundary it is a ghost node
             self.indexdict[tuple(coordinates)] = self.nodelist[self.get_node_index(coordinates)]
+            self.index_lookup_dict[tuple(coordinates)]=tuple(coordinates)
 
         for node in self.nodelist:  # initialize real node array
             if not True in node.ghost_node:
@@ -198,8 +271,8 @@ class Lattice:  # ND torus lattice
                         plane = (mu,nu)
                         self.plaquette_corner_dict[(node, plane)] = self.get_plaquette_corners(node, plane)
                         self.v_second_plaquette_corner_dict[(node,plane)] = self.v2_second_plaquette_corners(node, plane)
-                        self.Bdict[(node, plane)] = self.B(plane[0], plane[1], node)
-                        self.V2_Bdict[(node, plane)] = self.B(plane[0], plane[1], self.translate(node, plane[1], -1))
+                        self.Bdict[(node.tuplecoords, plane)] = self.B(plane[0], plane[1], node)
+                        self.V2_Bdict[(node.tuplecoords, plane)] = self.B(plane[0], plane[1], self.translate(node, plane[1], -1))
 
                         self.Barray[nodeindex, mu, nu, 0,0] = self.B(mu, nu, node)
                         self.V2_Barray[nodeindex, mu, nu, 0, 0] = self.B(mu, nu, self.translate(node, nu, -1))
@@ -212,8 +285,11 @@ class Lattice:  # ND torus lattice
                         self.staple_array[nodeindex, mu, nu, 1, 1] = self.translate(node, nu, -1).get_link(mu, 0)
                         self.staple_array[nodeindex, mu, nu, 1, 2] = self.translate(node, nu, -1).get_link(nu, 0)
                     elif nu == mu:
+                        plane = (mu,nu)
                         self.Barray[nodeindex, mu, nu, 0, 0] = self.B(mu, nu, node)
                         self.V2_Barray[nodeindex, mu, nu, 0, 0] = self.B(mu, nu, self.translate(node, nu, -1))
+                        self.Bdict[(node.tuplecoords, plane)] = self.B(plane[0], plane[1], node)
+                        self.V2_Bdict[(node.tuplecoords, plane)] = self.B(plane[0], plane[1], self.translate(node, plane[1], -1))
                         self.staple_array[nodeindex, mu, nu, 0, 0] = None
                         self.staple_array[nodeindex, mu, nu, 0, 1] = None
                         self.staple_array[nodeindex, mu, nu, 0, 2] = None
@@ -345,7 +421,7 @@ class Lattice:  # ND torus lattice
                     matrixholder.append(thislink.get_matrix())
                 else:
                     matrixholder.append(np.array([[None, None], [None, None]]))
-            matrix_dict[node] = matrixholder
+            matrix_dict[node.tuplecoords] = matrixholder
         return matrix_dict
 
     def get_plaquette_corners(self, node, plane):  # with corner as bottom left point in plaquette
@@ -417,26 +493,26 @@ class Lattice:  # ND torus lattice
         return np.real(action)
 
     def ghost_fill_configuration(self, configuration):
-        link_dict = configuration[0]
+        config_link_dict = configuration[0]
         momentum_dict = configuration[1]
-        filled_link_dict = link_dict.copy()
+        filled_link_dict = config_link_dict.copy()
         filled_momentum_dict = momentum_dict.copy()
         for node in self.ghost_nodearray:
             linkholder = []
             momentumholder = []
             for i in range(self.dimensions):
                 if not node.ghost_node[i]:
-                    linkholder.append(link_dict[node.get_link(i, 0).parent_link.node1][
+                    linkholder.append(config_link_dict[node.get_link(i, 0).parent_link.node1.tuplecoords][
                                           i])  # I've already done the math about which links should be identified
-                    momentumholder.append(momentum_dict[node.get_link(i, 0).parent_link.node1][
+                    momentumholder.append(momentum_dict[node.get_link(i, 0).parent_link.node1.tuplecoords][
                                               i])
                 else:
                     linkholder.append(np.array([[None, None], [None,
                                                                None]]))  # none array should never be involved in any calculation but should crash if it somehow is.
                     momentumholder.append(np.array([[None, None], [None,
                                                                    None]]))
-            filled_link_dict[node] = linkholder
-            filled_momentum_dict[node] = momentumholder
+            filled_link_dict[node.tuplecoords] = linkholder
+            filled_momentum_dict[node.tuplecoords] = momentumholder
         new_config = [filled_link_dict, filled_momentum_dict]
         return new_config
 
@@ -448,11 +524,15 @@ class Lattice:  # ND torus lattice
 
     """UTILITY FOR PICKLING"""
 
-    def __getstate__(self):
-        return {"shape":self.shape, "twists":self.twistmatrix}
+    """def __getstate__(self):
+        return {"shape":self.shape,
+                "twists":self.twistmatrix,
+                "index_lookup_dict":self.index_lookup_dict,
+                "processes":self.processes
+                }
 
     def __setstate__(self, state):
-        self.__init__(state["shape"], twistmatrix = state["twistmatrix"])
+        """
 
 
     """COOLING METHODS"""
@@ -622,7 +702,7 @@ class Lattice:  # ND torus lattice
     Will repeatedly use variable name "configuration" to represent a pair
      [link variable matrix dict, computer momentum dict]. It's important that the first entry
      is link variable matricies, and not the link variable objects themselves so we don't reset them
-     during time evolution. Dicts are formatted as dict[node] = [list of matricies indexed by direction] Dictionaries only contain real nodes, there's a method to ghost fill dictionaries when
+     during time evolution. Dicts are formatted as dict[node's coords] = [list of matricies indexed by direction] Dictionaries only contain real nodes, there's a method to ghost fill dictionaries when
      necessary."""
 
 
@@ -638,7 +718,7 @@ class Lattice:  # ND torus lattice
                 momenta_list.append(
                     momenta_vals[0] * lie_gens[0] + momenta_vals[1] * lie_gens[1] + momenta_vals[2] * lie_gens[2])
                 imaglist.append(np.array([np.imag(np.trace(matrix@lie_gens[0])),np.imag(np.trace(matrix@lie_gens[1])),np.imag(np.trace(matrix@lie_gens[2]))]))
-            new_momentum_dict[node] = momenta_list
+            new_momentum_dict[node.tuplecoords] = momenta_list
         imaglist = np.sum(np.abs(np.array(imaglist)), axis = 1)
         return new_momentum_dict
 
@@ -659,31 +739,91 @@ class Lattice:  # ND torus lattice
 
 
 
-    def single_node_momentum_update(self, config, dt, node):
-        new_matrix_list = range(self.dimensions)
+    """def single_node_momentum_update(self, config, dt, coordinates):
+        new_matrix_list = list(range(self.dimensions))
         link_dict = config[0]
+        node = self[coordinates]
         momentum_dict = config[1]
-        node_momenta = momentum_dict[node]
+        node_momenta = momentum_dict[coordinates]
         node_index = np.where(self.real_nodearray == node)
         for mu in range(self.dimensions):
             Vmu =0
             for nu in range(self.dimensions):
                 if mu != nu:
-                    staple_links = self.staple_array[node_index, mu, nu]
-                    Bval = self.B(mu, nu, node)
+                    staple_links = np.squeeze(self.staple_array[node_index, mu, nu])
+                    Bval = np.squeeze(self.Barray[node_index, mu, nu])
+                    V2Bval = np.squeeze(self.V2_Barray[node_index,mu,nu])
                     first_staple = staple_links[0][0].get_matrix() @ staple_links[0][1].get_matrix().conj().T @ staple_links[0][2].get_matrix().conj().T
                     second_staple = staple_links[1][0].get_matrix().conj().T @ staple_links[1][1].get_matrix().conj().T @  staple_links[1][2].get_matrix()
-                    Vmu += first_staple + Bval * second_staple
-            stapleterm = link_dict[node][mu].get_matrix() @ Vmu
+                    Vmu += Bval * first_staple + V2Bval* second_staple
+            stapleterm = link_dict[coordinates][mu] @ Vmu
             momentum_change = (1/g**2) * (stapleterm.conj().T - stapleterm) * dt
             new_matrix_list[mu] = node_momenta[mu] + momentum_change
-        return {node:tuple(new_matrix_list)}
+        return {tuple(node.coordinates):tuple(new_matrix_list)}"""
+
+
+
+
+    def single_node_momentum_update(self,initial_config,dt,coordinates):
+
+        link_dict = initial_config[0]
+        node = self[coordinates]
+        node_index = np.where(self.real_nodearray == node)
+        momentum_array = np.array(list(initial_config[1].values()))
+        link_array = np.array(list(link_dict.values()))
+        staple_matricies = np.array([link_dict[link.node1.tuplecoords][link.direction] if link!=None else np.array([[0,0],[0,0]]) for link in self.staple_array.flatten()]).reshape(self.staple_array.shape + (2,2))
+
+        #indicies are node, direction mu, direction nu, first/second term, list of staple matricies
+
+        #extract staple matricies
+        firststaplematricies, secondstaplematricies = np.split(staple_matricies, 2, axis = 3)
+
+        firststaplematricies = firststaplematricies[node_index]
+        secondstaplematricies = secondstaplematricies[node_index]
+
+        staple11, staple12, staple13 = np.split(firststaplematricies, 3, axis = 4)
+        staple21, staple22, staple23 = np.split(secondstaplematricies, 3, axis=4)
+
+
+        # calculate the twisted staple for each nu (index 2)
+        firststaple = self.Barray[...,None,None][node_index] * staple11 @ staple12.conj().swapaxes(-1,-2) @ staple13.conj().swapaxes(-1,-2)
+        secondstaple = self.V2_Barray[...,None, None][node_index] * staple21.conj().swapaxes(-1,-2) @ staple22.conj().swapaxes(-1,-2) @ staple23
+
+
+        #adding two terms together to get full staple then summing to get Vmu array. Squeeze to get rid of vestigal indicies
+        staplesum = firststaple + secondstaple
+        Varray = np.sum(staplesum, axis = 2)
+        Varray = np.squeeze(Varray)
+
+        #calculating momentum update
+        stapleterm = link_array[node_index] @ Varray
+        momentum_change = (1/g**2) * (stapleterm.conj().swapaxes(-1,-2) - stapleterm) * dt
+
+        new_momentum_array = momentum_array[node_index] + momentum_change
+
+
+        new_momentum_array = np.squeeze(new_momentum_array)
+
+        #new_momentum={coordinates:new_momentum_array}
+
+
+
+        return new_momentum_array
+
+    def batched_single_node_momentum_update(self,initial_config, dt, nodecoords): #ND numpy array nodecoords
+        outarray = np.zeros(shape=(len(nodecoords), self.dimensions, 2, 2), dtype=np.complex128)
+        for index, coord_instance in enumerate(nodecoords):
+            outarray[index]=self.single_node_momentum_update(initial_config, dt, coord_instance)
+
+        return outarray
+
+
     def vectorized_momentum_update(self,initial_config,dt):
 
         link_dict = initial_config[0]
         momentum_array = np.array(list(initial_config[1].values()))
         link_array = np.array(list(link_dict.values()))
-        staple_matricies = np.array([link_dict[link.node1][link.direction] if link!=None else np.array([[0,0],[0,0]]) for link in self.staple_array.flatten()]).reshape(self.staple_array.shape + (2,2))
+        staple_matricies = np.array([link_dict[link.node1.tuplecoords][link.direction] if link!=None else np.array([[0,0],[0,0]]) for link in self.staple_array.flatten()]).reshape(self.staple_array.shape + (2,2))
 
         #indicies are node, direction mu, direction nu, first/second term, list of staple matricies
 
@@ -709,6 +849,9 @@ class Lattice:  # ND torus lattice
         #updating momentum
         new_momentum_array = momentum_array + momentum_change
 
+
+
+        #print("vector", new_momentum_array)
         #new config
         new_config = [initial_config[0], dict(zip(initial_config[1].keys(), list(new_momentum_array)))]
         #print("elapsed", time.time()-starttime)
@@ -716,23 +859,32 @@ class Lattice:  # ND torus lattice
 
 
 
-
     def parallel_momentum_update(self, initial_config, dt):
         processes = self.processes
         new_momentum_dict = {}
-        helper = partial(self.single_node_momentum_update, initial_config, dt)
-        with Pool(processes) as pool:
-            dictlist = pool.map(helper, self.real_nodearray)
-        for dict in dictlist:
-            new_momentum_dict.update(dict)
+
+        inputs = [[initial_config, dt, node.tuplecoords] for node in self.real_nodearray]
+
+        #arraylist = np.array(list(itertools.starmap(self.single_node_momentum_update, inputs)))
+        #print(dictlist)
+        with mp.Pool(processes) as pool:
+            arraylist = pool.starmap(self.single_node_momentum_update, inputs, chunksize = 1)
+
+        for index,node in enumerate(self.real_nodearray):
+            new_momentum_dict[node.tuplecoords] = arraylist[index]
+
+
+        #print("single", new_momentum_dict)
+
         final_config = [initial_config[0], new_momentum_dict]
+
         return final_config
 
 
 
 
 
-    #works but is slow as balls. Use vectorized whenever possible
+
     def momentum_update(self, initial_config, dt):  # sends momentum at n*dt - dt/2 to n * dt + dt/2
         starttime = time.time()
         momentum_array = np.transpose(np.array(list(initial_config[1].values())), axes=[1, 0, 2,
@@ -755,17 +907,16 @@ class Lattice:  # ND torus lattice
                 Vsecond = 0
                 for sum_direction  in range(self.dimensions):
                     if sum_direction != direction:
-                        Vfirst+=self.B(direction, sum_direction, node) * link_dict[self.translate(node, direction, 1)][sum_direction]\
-                                @ link_dict[self.translate(node, sum_direction, 1)][direction].conj().T\
-                                @ link_dict[node][sum_direction].conj().T
-                        Vsecond+=self.B(direction, sum_direction, self.translate(node, sum_direction, -1)) * link_dict[self.translate(self.translate(node,sum_direction, -1), direction, 1)][sum_direction].conj().T \
-                                 @ link_dict[self.translate(node, sum_direction,-1)][direction].conj().T\
-                                 @ link_dict[self.translate(node, sum_direction, -1)][sum_direction]
+                        Vfirst+=self.B(direction, sum_direction, node) * link_dict[self.translate(node, direction, 1).tuplecoords][sum_direction]\
+                                @ link_dict[self.translate(node, sum_direction, 1).tuplecoords][direction].conj().T\
+                                @ link_dict[node.tuplecoords][sum_direction].conj().T
+                        Vsecond+=self.B(direction, sum_direction, self.translate(node, sum_direction, -1)) * link_dict[self.translate(self.translate(node,sum_direction, -1), direction, 1).tuplecoords][sum_direction].conj().T \
+                                 @ link_dict[self.translate(node, sum_direction,-1).tuplecoords][direction].conj().T\
+                                 @ link_dict[self.translate(node, sum_direction, -1).tuplecoords][sum_direction]
 
                 Vdirection = Vfirst + Vsecond
-                momentum_change = (1/g**2) * (Vdirection.conj().T @ link_dict[node][direction].conj().T - link_dict[node][direction] @ Vdirection)
-                #momentum_dict[node][direction]+=momentum_change * dt
-                #test:
+                momentum_change = (1/g**2) * (Vdirection.conj().T @ link_dict[node.tuplecoords][direction].conj().T - link_dict[node.tuplecoords][direction] @ Vdirection)
+
                 Varray[nodeindex, direction] = Vdirection
                 momentum_array[direction, nodeindex] +=momentum_change*dt
 
@@ -843,6 +994,7 @@ class Lattice:  # ND torus lattice
         config = self.link_update(config, dt)
 
         for i in range(nsteps-1):
+            print("step", i)
             config = self.parallel_evolution_step(config, dt)
 
         config = self.parallel_momentum_update(config, dt / 2)
@@ -876,10 +1028,10 @@ class Lattice:  # ND torus lattice
             for direction1 in range(self.dimensions):
                 for direction2 in range(self.dimensions):
                     if direction1 != direction2:
-                        node1 = filled_link_matricies_dict[node][direction1]
-                        node2 = filled_link_matricies_dict[self.translate(node, direction1, 1)][direction2]
-                        node3 = filled_link_matricies_dict[self.translate(node, direction2, 1)][direction1].conj().T
-                        node4 = filled_link_matricies_dict[node][direction2].conj().T
+                        node1 = filled_link_matricies_dict[node.tuplecoords][direction1]
+                        node2 = filled_link_matricies_dict[self.translate(node, direction1, 1).tuplecoords][direction2]
+                        node3 = filled_link_matricies_dict[self.translate(node, direction2, 1).tuplecoords][direction1].conj().T
+                        node4 = filled_link_matricies_dict[node.tuplecoords][direction2].conj().T
                         holonomy = node1 @ node2 @ node3 @ node4
                         runningsum += np.trace(np.matrix([[1,0],[0,1]]) - self.B(direction1, direction2, node) * holonomy)
         action = runningsum
@@ -924,16 +1076,16 @@ class Lattice:  # ND torus lattice
             Blist = np.array(Blist)
             first_link_matricies = np.array(
                 [link_matricies[plane[0]] for link_matricies in
-                 [filled_link_matricies_dict[node] for node in node_plaquette_corners[0]]])
+                 [filled_link_matricies_dict[node.tuplecoords] for node in node_plaquette_corners[0]]])
             second_link_matricies = np.array(
                 [link_matricies[plane[1]] for link_matricies in
-                 [filled_link_matricies_dict[node] for node in node_plaquette_corners[1]]])
+                 [filled_link_matricies_dict[node.tuplecoords] for node in node_plaquette_corners[1]]])
             third_link_matricies = np.array(
                 [link_matricies[plane[0]].conj().T for link_matricies in
-                 [filled_link_matricies_dict[node] for node in node_plaquette_corners[3]]])
+                 [filled_link_matricies_dict[node.tuplecoords] for node in node_plaquette_corners[3]]])
             fourth_link_matricies = np.array(
                 [link_matricies[plane[1]].conj().T for link_matricies in
-                 [filled_link_matricies_dict[node] for node in node_plaquette_corners[0]]])
+                 [filled_link_matricies_dict[node.tuplecoords] for node in node_plaquette_corners[0]]])
             # plane_holonomies: gives array of each matrix corresponding to the holonomy around a plaquette
             # in list corresponding to posiiton of corner node in self.real_nodearray
             plane_holonomies = Blist[:, np.newaxis, np.newaxis] * (
@@ -948,17 +1100,17 @@ class Lattice:  # ND torus lattice
         observablelist = []
         #print("initial Hamiltonian, Action")
         Hinitial = self.hamiltonian(initial_configuration)
-        Ainitial = self.get_config_action(initial_configuration)
+        #Ainitial = self.get_config_action(initial_configuration)
         #print(Hinitial, Ainitial)
 
-        print("action:", Ainitial)
-        #print("final Hamiltonian, action")
+        #print("action:", Ainitial)
+        #print("final Hamiltonian")
         Hnew = self.hamiltonian(new_configuration)
-        #print(Hnew, Anew)
+        #print(Hnew)
         difference = Hnew - Hinitial
         transition_prob = np.minimum(1, np.exp(-difference))
         randomvar = random.uniform(0, 1)
-        #print("Hamiltonian difference:", difference, "Configuration transition probability:", transition_prob)
+        print("Hamiltonian difference:", difference, "Configuration transition probability:", transition_prob)
         #print("Hamiltonian difference over initial Hamiltonian:", np.abs(difference/Hinitial))
         if randomvar < transition_prob:
             observable_dict = {}

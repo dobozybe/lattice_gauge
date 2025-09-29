@@ -20,24 +20,56 @@ if not np.all((np.array(twistmatrix) + np.array(twistmatrix).T) == 0):
     print("Bad twist matrix!")
     sys.exit()
 
-myLattice = Lattice([3,3,3,3], twistmatrix = twistmatrix) #24,6,6,24
 
 
-plaquette = One_Cube_Plaquette()
-windingGeneral = General_Winding([0,0,0,0])
-action = Action()
-topcharge = TopologicalCharge()
+def dicts_equal(d1, d2, tol=True):
+    if d1.keys() != d2.keys():
+        print("Different keys:")
+        print("Only in d1:", d1.keys() - d2.keys())
+        print("Only in d2:", d2.keys() - d1.keys())
+        return False
+    cmp = np.allclose if tol else np.array_equal
+    equal = True
+    for k in d1:
+        if not cmp(d1[k], d2[k]):
+            print(f"Mismatch at key: {k}")
+            print("d1 value:", d1[k])
+            print("d2 value:", d2[k])
+            equal = False
+    return equal
+
+
+if __name__ == "__main__":
+    myLattice = Lattice([4,4,4,4], twistmatrix = twistmatrix) #24,6,6,24
+
+    plaquette = One_Cube_Plaquette()
+    windingGeneral = General_Winding([0,0,0,0])
+    action = Action()
+    topcharge = TopologicalCharge()
+    #myLattice.chain(1,1,100, observables=[windingGeneral, action, topcharge], log = False)
+    myLattice.parallel_chain(1, 0.01, 10, observables=[windingGeneral, action, topcharge], log = False)
+
+    """config = [myLattice.get_link_matrix_dict(), myLattice.random_momentum()]
 
 
 
-myLattice.parallel_chain(1000, 1, 1000, observables=[windingGeneral, action, topcharge], log = True)
+    momentum = myLattice.vectorized_momentum_update(config, 0.1)[1]
 
-"""data = handle_observables("1plaquette_data/million_1hypercube_0.5g['genwinding[0, 0, 0, 0]', 'action', 'onecubeplaquette'][1, 1, 1, 1]_twists:[[0, 1], [2, 3]]", [action, plaquette, windingGeneral])
+    holder = []
+    for arraylist in list(momentum.values()):
+        newlist = []
+        for array in arraylist:
+            newlist.append(array.copy())
+        holder.append(newlist)
 
-action.visualize(data)
-plaquette.visualize(data)
-windingGeneral.visualize(data)
-plt.show()"""
+    momentum1 = dict(zip(momentum.keys(), holder))
+
+    momentum2 = myLattice.parallel_momentum_update(config, 0.1)[1]
+
+
+    print(dicts_equal(momentum1, momentum2))
+"""
+
 
 def create_saved_lattice():
     myLattice = Lattice([3,3,3,3])

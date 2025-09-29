@@ -3,6 +3,7 @@ import pickle
 class Node:
     def __init__(self, coordinates, is_ghost_node = False):
         self.coordinates = coordinates
+        self.tuplecoords = tuple(coordinates)
         self.links = []
         self.ghost_node = is_ghost_node
         self.dimensions = len(coordinates)
