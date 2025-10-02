@@ -41,7 +41,8 @@ def dicts_equal(d1, d2, tol=True):
 
 if __name__ == "__main__":
     myLattice = Lattice([4,4,4,4], twistmatrix = twistmatrix) #24,6,6,24
-    myLattice.processes = 10
+    myLattice.processes = int(os.environ.get("SLURM_CPUS_PER_TASK", 1))
+    myLattice.chunksize = 10
     plaquette = One_Cube_Plaquette()
     windingGeneral = General_Winding([0,0,0,0])
     action = Action()

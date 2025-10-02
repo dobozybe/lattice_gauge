@@ -215,6 +215,7 @@ class Lattice:  # ND torus lattice
         self.Bdict = {}
         self.V2_Bdict = {}
         self.link_dict = {}
+        self.chunksize = 1
 
 
         self.num_nodes = 1  # not including ghosts
@@ -890,7 +891,7 @@ class Lattice:  # ND torus lattice
         #arraylist = np.array(list(itertools.starmap(self.single_node_momentum_update, inputs)))
         #print(dictlist)
         with mp.Pool(processes) as pool:
-            arraylist = pool.starmap(self.single_node_momentum_update, inputs, chunksize = 1)
+            arraylist = pool.starmap(self.single_node_momentum_update, inputs, chunksize = self.chunksize)
 
         for index,node in enumerate(self.real_nodearray):
             new_momentum_dict[node.tuplecoords] = arraylist[index]
