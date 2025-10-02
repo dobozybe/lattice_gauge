@@ -242,6 +242,7 @@ class Lattice:  # ND torus lattice
         for node in self.nodelist:  # initialize real node array
             if not True in node.ghost_node:
                 self.real_nodearray.append(node)
+                node.index_in_real_nodearray = self.real_nodearray.index(node)
             else:
                 self.ghost_nodearray.append(node)
         self.real_nodearray = np.array(self.real_nodearray)
@@ -764,25 +765,34 @@ class Lattice:  # ND torus lattice
 
 
 
-    def single_node_momentum_update(self,initial_config,dt,coordinates):
+    def single_node_momentum_update(self,initial_config_array,dt,coordinates,staple_matrix_array):
 
-        link_dict = initial_config[0]
+        #link_dict = initial_config[0]
         node = self[coordinates]
-        node_index = np.where(self.real_nodearray == node)
-        momentum_array = np.array(list(initial_config[1].values()))
-        link_array = np.array(list(link_dict.values()))
-        staple_matricies = np.array([link_dict[link.node1.tuplecoords][link.direction] if link!=None else np.array([[0,0],[0,0]]) for link in self.staple_array.flatten()]).reshape(self.staple_array.shape + (2,2))
+        node_index = node.index_in_real_nodearray
+        #momentum_array = np.array(list(initial_config[1].values()))
+        link_array = initial_config_array[0]
+        momentum_array = initial_config_array[1]
+
+        staple_matricies = staple_matrix_array[node_index]
+
+        #print("agar", np.shape(link_array))
+        #print(np.shape(self.real_nodearray))
+
+        """for link in self.staple_array.flatten():
+            if link!=None:
+                print("magar", np.shape(link_array[link.node1.index_in_real_nodearray]))
+"""
 
         #indicies are node, direction mu, direction nu, first/second term, list of staple matricies
 
+
         #extract staple matricies
-        firststaplematricies, secondstaplematricies = np.split(staple_matricies, 2, axis = 3)
+        firststaplematricies, secondstaplematricies = np.split(staple_matricies, 2, axis = 2)
 
-        firststaplematricies = firststaplematricies[node_index]
-        secondstaplematricies = secondstaplematricies[node_index]
 
-        staple11, staple12, staple13 = np.split(firststaplematricies, 3, axis = 4)
-        staple21, staple22, staple23 = np.split(secondstaplematricies, 3, axis=4)
+        staple11, staple12, staple13 = np.split(firststaplematricies, 3, axis = 3)
+        staple21, staple22, staple23 = np.split(secondstaplematricies, 3, axis=3)
 
 
         # calculate the twisted staple for each nu (index 2)
@@ -792,7 +802,8 @@ class Lattice:  # ND torus lattice
 
         #adding two terms together to get full staple then summing to get Vmu array. Squeeze to get rid of vestigal indicies
         staplesum = firststaple + secondstaple
-        Varray = np.sum(staplesum, axis = 2)
+
+        Varray = np.sum(staplesum, axis = 1)
         Varray = np.squeeze(Varray)
 
         #calculating momentum update
@@ -803,6 +814,7 @@ class Lattice:  # ND torus lattice
 
 
         new_momentum_array = np.squeeze(new_momentum_array)
+        #print(np.shape(new_momentum_array))
 
         #new_momentum={coordinates:new_momentum_array}
 
@@ -863,7 +875,17 @@ class Lattice:  # ND torus lattice
         processes = self.processes
         new_momentum_dict = {}
 
-        inputs = [[initial_config, dt, node.tuplecoords] for node in self.real_nodearray]
+        link_dict = initial_config[0]
+        momentum_dict = initial_config[1]
+
+        link_array = np.array(list(link_dict.values()))
+        momentum_array = np.array(list(momentum_dict.values()))
+        config_array = np.stack([link_array, momentum_array])
+
+        staple_matricies = np.array([link_array[link.node1.index_in_real_nodearray][link.direction] if link!=None else np.array([[0,0],[0,0]]) for link in self.staple_array.flatten()]).reshape(self.staple_array.shape + (2,2))
+
+
+        inputs = [[config_array, dt, node.tuplecoords, staple_matricies] for node in self.real_nodearray]
 
         #arraylist = np.array(list(itertools.starmap(self.single_node_momentum_update, inputs)))
         #print(dictlist)

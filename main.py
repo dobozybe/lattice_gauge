@@ -41,7 +41,7 @@ def dicts_equal(d1, d2, tol=True):
 
 if __name__ == "__main__":
     myLattice = Lattice([4,4,4,4], twistmatrix = twistmatrix) #24,6,6,24
-
+    myLattice.processes = 10
     plaquette = One_Cube_Plaquette()
     windingGeneral = General_Winding([0,0,0,0])
     action = Action()

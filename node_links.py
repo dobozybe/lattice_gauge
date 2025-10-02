@@ -6,6 +6,7 @@ class Node:
         self.tuplecoords = tuple(coordinates)
         self.links = []
         self.ghost_node = is_ghost_node
+        self.index_in_real_nodearray = 0
         self.dimensions = len(coordinates)
         for direction in range(len(coordinates)):
             self.links.append([None, None])
