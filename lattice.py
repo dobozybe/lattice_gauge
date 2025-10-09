@@ -52,6 +52,8 @@ lie_gens = np.stack([ #i sigma_n where sigma_i are the paulis.
 
 
 def su2_exp(matrixarray):
+    array_shape = np.shape(matrixarray)
+    matrixarray = matrixarray.reshape(-1,2,2)
     gen0 = np.broadcast_to(lie_gens[0].conj().T, matrixarray.shape)
     gen1 = np.broadcast_to(lie_gens[1].conj().T, matrixarray.shape)
     gen2 = np.broadcast_to(lie_gens[2].conj().T, matrixarray.shape)
@@ -71,6 +73,7 @@ def su2_exp(matrixarray):
     exp = np.eye(2)[np.newaxis, :, :] * np.cos(modded_normparams)[:, np.newaxis, np.newaxis]+np.einsum(
         "ij, jkl->ikl", normed_paramarray, lie_gens
     ) * np.sin(modded_normparams)[:, np.newaxis, np.newaxis]
+    exp = exp.reshape(array_shape)
     return exp
 
 
@@ -739,51 +742,40 @@ class Lattice:  # ND torus lattice
         new_config = [new_link_dict, initial_config[1]]
         return new_config
 
+    def single_node_link_update(self, initial_config_arrays, dt, node_index):
+        link_array = initial_config_arrays[0]
+        momentum_array = initial_config_arrays[1]
+        new_link_array = su2_exp(dt * momentum_array[node_index]) @ link_array[node_index] #should give a list of matricies indexed by direction
+        return new_link_array
+
+    def batched_single_node_link_update(self, initial_config_arrays, dt, start, end):
+        link_array = initial_config_arrays[0]
+        momentum_array = initial_config_arrays[1]
+
+        batch_link = link_array[start:end+1]
+        batch_momentum = momentum_array[start:end+1]
+
+        batch_out = su2_exp(dt * batch_momentum) @ batch_link
+        return batch_out
 
 
-    """def single_node_momentum_update(self, config, dt, coordinates):
-        new_matrix_list = list(range(self.dimensions))
-        link_dict = config[0]
-        node = self[coordinates]
-        momentum_dict = config[1]
-        node_momenta = momentum_dict[coordinates]
-        node_index = np.where(self.real_nodearray == node)
-        for mu in range(self.dimensions):
-            Vmu =0
-            for nu in range(self.dimensions):
-                if mu != nu:
-                    staple_links = np.squeeze(self.staple_array[node_index, mu, nu])
-                    Bval = np.squeeze(self.Barray[node_index, mu, nu])
-                    V2Bval = np.squeeze(self.V2_Barray[node_index,mu,nu])
-                    first_staple = staple_links[0][0].get_matrix() @ staple_links[0][1].get_matrix().conj().T @ staple_links[0][2].get_matrix().conj().T
-                    second_staple = staple_links[1][0].get_matrix().conj().T @ staple_links[1][1].get_matrix().conj().T @  staple_links[1][2].get_matrix()
-                    Vmu += Bval * first_staple + V2Bval* second_staple
-            stapleterm = link_dict[coordinates][mu] @ Vmu
-            momentum_change = (1/g**2) * (stapleterm.conj().T - stapleterm) * dt
-            new_matrix_list[mu] = node_momenta[mu] + momentum_change
-        return {tuple(node.coordinates):tuple(new_matrix_list)}"""
+    def parallel_link_update(self, initial_config_arrays, dt):
+        print(np.shape(initial_config_arrays))
+        inputs = [[initial_config_arrays, dt, nodeindex] for nodeindex in range(len(self.real_nodearray))]
+        pool = self._pool
+        new_links_array = np.stack(pool.starmap(self.single_node_link_update, inputs, chunksize = self.chunksize))
+        return np.stack([new_links_array, initial_config_arrays[1]])
 
 
 
 
-    def single_node_momentum_update(self,initial_config_array,dt,coordinates,staple_matrix_array):
+    def single_node_momentum_update(self,initial_config_array,dt,node_index,staple_matrix_array):
 
-        #link_dict = initial_config[0]
-        node = self[coordinates]
-        node_index = node.index_in_real_nodearray
-        #momentum_array = np.array(list(initial_config[1].values()))
         link_array = initial_config_array[0]
         momentum_array = initial_config_array[1]
 
         staple_matricies = staple_matrix_array[node_index]
 
-        #print("agar", np.shape(link_array))
-        #print(np.shape(self.real_nodearray))
-
-        """for link in self.staple_array.flatten():
-            if link!=None:
-                print("magar", np.shape(link_array[link.node1.index_in_real_nodearray]))
-"""
 
         #indicies are node, direction mu, direction nu, first/second term, list of staple matricies
 
@@ -820,15 +812,50 @@ class Lattice:  # ND torus lattice
         #new_momentum={coordinates:new_momentum_array}
 
 
-
         return new_momentum_array
 
-    def batched_single_node_momentum_update(self,initial_config, dt, nodecoords): #ND numpy array nodecoords
-        outarray = np.zeros(shape=(len(nodecoords), self.dimensions, 2, 2), dtype=np.complex128)
-        for index, coord_instance in enumerate(nodecoords):
-            outarray[index]=self.single_node_momentum_update(initial_config, dt, coord_instance)
+    def batched_single_node_momentum_update(self,initial_config, dt, start,end, staple_matrix_array): #ND numpy array nodecoords
 
-        return outarray
+        link_array = initial_config[0][start:end+1]
+        momentum_array = initial_config[1][start:end+1]
+
+        staple_matricies = staple_matrix_array[start:end+1]
+
+
+        # indicies are node, direction mu, direction nu, first/second term, list of staple matricies
+
+        # extract staple matricies
+        firststaplematricies, secondstaplematricies = np.split(staple_matricies, 2, axis=3)
+
+        staple11, staple12, staple13 = np.split(firststaplematricies, 3, axis=4)
+        staple21, staple22, staple23 = np.split(secondstaplematricies, 3, axis=4)
+
+        # calculate the twisted staple for each nu (index 2)
+        firststaple = self.Barray[..., None, None][start:end+1] * staple11 @ staple12.conj().swapaxes(-1,
+                                                                                                     -2) @ staple13.conj().swapaxes(
+            -1, -2)
+        secondstaple = self.V2_Barray[..., None, None][start:end+1] * staple21.conj().swapaxes(-1,
+                                                                                              -2) @ staple22.conj().swapaxes(
+            -1, -2) @ staple23
+
+        # adding two terms together to get full staple then summing to get Vmu array. Squeeze to get rid of vestigal indicies
+        staplesum = firststaple + secondstaple
+
+        Varray = np.sum(staplesum, axis=2)
+        Varray = np.squeeze(Varray)
+
+        # calculating momentum update
+        stapleterm = link_array @ Varray
+        momentum_change = (1 / g ** 2) * (stapleterm.conj().swapaxes(-1, -2) - stapleterm) * dt
+
+        new_momentum_array = momentum_array + momentum_change
+
+        new_momentum_array = np.squeeze(new_momentum_array)
+        # print(np.shape(new_momentum_array))
+
+        # new_momentum={coordinates:new_momentum_array}
+
+        return new_momentum_array
 
 
     def vectorized_momentum_update(self,initial_config,dt):
@@ -872,36 +899,16 @@ class Lattice:  # ND torus lattice
 
 
 
-    def parallel_momentum_update(self, initial_config, dt):
-        processes = self.processes
-        new_momentum_dict = {}
-
-        link_dict = initial_config[0]
-        momentum_dict = initial_config[1]
-
-        link_array = np.array(list(link_dict.values()))
-        momentum_array = np.array(list(momentum_dict.values()))
-        config_array = np.stack([link_array, momentum_array])
-
+    def parallel_momentum_update(self, initial_config_arrays, dt):
+        pool = self._pool
+        link_array = initial_config_arrays[0]
         staple_matricies = np.array([link_array[link.node1.index_in_real_nodearray][link.direction] if link!=None else np.array([[0,0],[0,0]]) for link in self.staple_array.flatten()]).reshape(self.staple_array.shape + (2,2))
 
 
-        inputs = [[config_array, dt, node.tuplecoords, staple_matricies] for node in self.real_nodearray]
+        inputs = [[initial_config_arrays, dt, node.index_in_real_nodearray, staple_matricies] for node in self.real_nodearray]
 
-        #arraylist = np.array(list(itertools.starmap(self.single_node_momentum_update, inputs)))
-        #print(dictlist)
-        with mp.Pool(processes) as pool:
-            arraylist = pool.starmap(self.single_node_momentum_update, inputs, chunksize = self.chunksize)
-
-        for index,node in enumerate(self.real_nodearray):
-            new_momentum_dict[node.tuplecoords] = arraylist[index]
-
-
-        #print("single", new_momentum_dict)
-
-        final_config = [initial_config[0], new_momentum_dict]
-
-        return final_config
+        new_momentum_array = np.stack(pool.starmap(self.single_node_momentum_update, inputs, chunksize = self.chunksize))
+        return np.stack([link_array, new_momentum_array])
 
 
 
@@ -967,9 +974,30 @@ class Lattice:  # ND torus lattice
         return link_config
 
     def parallel_evolution_step(self, config, dt):
-        momentum_config = self.parallel_momentum_update(config, dt)
-        link_config = self.link_update(momentum_config, dt)
-        return link_config
+        pool = self._pool
+        link_array = config[0]
+        batch_size = int(np.ceil(self.num_nodes/self.processes))
+
+        array_shape = np.shape(link_array)
+
+
+        staple_matricies = np.array([link_array[link.node1.index_in_real_nodearray][
+                                         link.direction] if link != None else np.array([[0, 0], [0, 0]]) for link in
+                                     self.staple_array.flatten()]).reshape(self.staple_array.shape + (2, 2))
+
+        momentum_inputs = [[config, dt, i * batch_size, np.min([(i + 1) * batch_size-1, self.num_nodes-1]), staple_matricies] for i in range(self.processes)]
+
+        new_momentum_array = np.stack(pool.starmap(self.batched_single_node_momentum_update, momentum_inputs, chunksize=self.chunksize))
+
+        new_momentum_array = np.reshape(new_momentum_array, newshape = array_shape)
+        momentum_config = np.stack([link_array, new_momentum_array])
+
+        link_inputs = [[momentum_config, dt,i * batch_size, np.min([(i + 1) * batch_size-1, self.num_nodes-1])] for i in range(self.processes)]
+
+        new_link_array = np.stack(pool.starmap(self.batched_single_node_link_update, link_inputs, chunksize = self.chunksize))
+
+        new_link_array = np.reshape(new_link_array, newshape=array_shape)
+        return np.stack([new_link_array, new_momentum_array])
 
     def time_evolve(self, initial_config, evolution_time, nsteps=10000):
         starttime = time.time()
@@ -1006,24 +1034,37 @@ class Lattice:  # ND torus lattice
 
 
 
-    def parallel_time_evolve(self, initial_config, evolution_time, nsteps=10000):
+    def parallel_time_evolve(self, initial_config, evolution_time, nsteps=10000): #in this, configs are numpy arrays rather than dicts for performance reasons
         starttime = time.time()
-        config = initial_config
+        new_momentum_dict = {}
+        new_link_dict = {}
         dt = evolution_time / nsteps
 
+        link_dict = initial_config[0]
+        momentum_dict = initial_config[1]
 
-        config = self.parallel_momentum_update(config, dt / 2)
+        link_array = np.array(list(link_dict.values()))
+        momentum_array = np.array(list(momentum_dict.values()))
 
-        config = self.link_update(config, dt)
+        config = np.stack([link_array, momentum_array])
 
-        for i in range(nsteps-1):
-            print("step", i)
-            config = self.parallel_evolution_step(config, dt)
+        with mp.Pool(self.processes) as pool:
+            self._pool = pool
 
-        config = self.parallel_momentum_update(config, dt / 2)
+            config = self.parallel_momentum_update(config, dt / 2)
+
+            config = self.parallel_link_update(config, dt)
+            for i in range(nsteps-1):
+                config = self.parallel_evolution_step(config, dt)
+
+            config = self.parallel_momentum_update(config, dt / 2)
 
         print("Elapsed time for time evolution:", time.time() - starttime)
-
+        del self._pool
+        for node in self.real_nodearray:
+            new_momentum_dict[node.tuplecoords] = config[1][node.index_in_real_nodearray]
+            new_link_dict[node.tuplecoords]=config[0][node.index_in_real_nodearray]
+        config = [new_link_dict, new_momentum_dict]
         return config
 
     def generate_candidate_configuration(self, current_configuration, evol_time, number_steps):

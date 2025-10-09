@@ -6,6 +6,7 @@ import copy
 import sys
 import cProfile
 import pickle
+import tracemalloc
 import time
 from observables import *
 import multiprocessing
@@ -40,17 +41,48 @@ def dicts_equal(d1, d2, tol=True):
 
 
 if __name__ == "__main__":
-    myLattice = Lattice([4,4,4,4], twistmatrix = twistmatrix) #24,6,6,24
-    myLattice.processes = int(os.environ.get("SLURM_CPUS_PER_TASK", 1))
-    myLattice.chunksize = 10
+
+    myLattice = Lattice([24,6,6,24], twistmatrix = twistmatrix) #24,6,6,24
+    myLattice.processes = int(os.environ.get("SLURM_CPUS_PER_TASK", 8))
+    myLattice.chunksize = 6*6*6*12
     plaquette = One_Cube_Plaquette()
     windingGeneral = General_Winding([0,0,0,0])
     action = Action()
     topcharge = TopologicalCharge()
-    #myLattice.chain(1,1,100, observables=[windingGeneral, action, topcharge], log = False)
-    myLattice.parallel_chain(1, 0.01, 10, observables=[windingGeneral, action, topcharge], log = False)
+    #myLattice.parallel_chain(1, 0.01, 50, log=False)
+    myLattice.chain(1,0.01,50, log = False)
 
-    """config = [myLattice.get_link_matrix_dict(), myLattice.random_momentum()]
+"""momentum = myLattice.random_momentum()
+    holder = []
+    for arraylist in list(momentum.values()):
+        newlist = []
+        for array in arraylist:
+            newlist.append(array.copy())
+        holder.append(newlist)
+    old_config = [myLattice.get_link_matrix_dict(), dict(zip(momentum.keys(), holder))]
+
+    config = [myLattice.get_link_matrix_dict(), momentum]
+    new_config1 = myLattice.momentum_update(config, 0.01)
+
+    link_dict = old_config[0]
+    momentum_dict = old_config[1]
+
+    link_array = np.array(list(link_dict.values()))
+    momentum_array = np.array(list(momentum_dict.values()))
+
+    staple_matricies = np.array([link_array[link.node1.index_in_real_nodearray][
+                                     link.direction] if link != None else np.array([[0, 0], [0, 0]]) for link in
+                                 myLattice.staple_array.flatten()]).reshape(myLattice.staple_array.shape + (2, 2))
+
+
+    new_config2 = myLattice.batched_single_node_momentum_update([link_array, momentum_array], 0.01, 0, len(myLattice.real_nodearray)-1, staple_matricies)
+
+
+"""
+
+
+
+"""config = [myLattice.get_link_matrix_dict(), myLattice.random_momentum()]
 
 
 
