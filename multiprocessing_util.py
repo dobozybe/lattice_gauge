@@ -36,30 +36,11 @@ def batched_single_node_momentum_update(dt, start,end, g): #ND numpy array nodec
 
     print("updating momentum!!, processing batch: ", start, end)
 
-    print("Testing config access...")
-    print(f"config shape: {config.shape}")
-    print(f"Attempting to slice config[0][{start}:{end + 1}]")
+    link_array = config[0][start:end + 1]
+    momentum_array = config[1][start:end + 1]
+    staple_matricies = staple_matrix_array[start:end + 1]
 
-    print("Testing staple_matrix_array access...")
-    print(f"staple_matrix_array shape: {staple_matrix_array.shape}")
-    print(f"Attempting to slice staple_matrix_array[{start}:{end + 1}]")
-
-    print("Copying staple_matricies...")
-    staple_matricies = staple_matrix_array[start:end + 1].copy()
-    print(f"staple_matricies copied, shape: {staple_matricies.shape}")
-
-    print("Copying link_array...")
-    link_array = config[0][start:end + 1].copy()
-    print(f"link_array copied, shape: {link_array.shape}")
-
-    print("Copying momentum_array...")
-    momentum_array = config[1][start:end + 1].copy()
-    print(f"momentum_array copied, shape: {momentum_array.shape}")
-
-
-
-
-    print("made staple matricies in batch", start, end)
+    print("made staple matricies and link and momentum arrays in batch", start, end)
 
 
     # indicies are node, direction mu, direction nu, first/second term, list of staple matricies
@@ -73,32 +54,12 @@ def batched_single_node_momentum_update(dt, start,end, g): #ND numpy array nodec
 
     print("calculating twisted staple")
     # calculate the twisted staple for each nu (index 2)
-    """firststaple = Barray[..., None, None][start:end+1] * staple11 @ staple12.conj().swapaxes(-1,
+    firststaple = Barray[..., None, None][start:end+1] * staple11 @ staple12.conj().swapaxes(-1,
                                                                                                  -2) @ staple13.conj().swapaxes(
         -1, -2)
     secondstaple = V2_Barray[..., None, None][start:end+1] * staple21.conj().swapaxes(-1,
                                                                                           -2) @ staple22.conj().swapaxes(
-        -1, -2) @ staple23"""
-    print(staple12.dtype)
-    print(np.shape(staple12))
-    print(staple12)
-    print("making temp1")
-    temp1 = staple12.conj().swapaxes(-1, -2)
-    print("making temp2")
-    temp2 = staple11 @ temp1
-    print("making temp3")
-    temp3 = staple13.conj().swapaxes(-1, -2)
-    print("assembling first staple")
-    firststaple = Barray_local[..., None, None][start:end + 1] * (temp2 @ temp3)
-
-    print("first staple done")
-
-    temp4 = staple21.conj().swapaxes(-1, -2)
-    temp5 = staple22.conj().swapaxes(-1, -2)
-    temp6 = temp4 @ temp5
-    secondstaple = V2_Barray_local[..., None, None][start:end + 1] * (temp6 @ staple23)
-
-    print("second staple done")
+        -1, -2) @ staple23
 
 
     print("getting full staple")
