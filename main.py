@@ -1,4 +1,4 @@
-from lattice import *
+from lattice_shared_mem_mp import *
 from lattice import randomSU2
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,14 +12,6 @@ from observables import *
 import multiprocessing
 import os
 
-
-twistmatrix = [[0,1,0,0],[-1,0,0,0],[0,0,0,0],[0,0,0,0]]
-
-
-
-if not np.all((np.array(twistmatrix) + np.array(twistmatrix).T) == 0):
-    print("Bad twist matrix!")
-    sys.exit()
 
 
 
@@ -42,15 +34,21 @@ def dicts_equal(d1, d2, tol=True):
 
 if __name__ == "__main__":
 
+    twistmatrix = [[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]
+
+    if not np.all((np.array(twistmatrix) + np.array(twistmatrix).T) == 0):
+        print("Bad twist matrix!")
+        sys.exit()
+
     myLattice = Lattice([24,6,6,24], twistmatrix = twistmatrix) #24,6,6,24
-    myLattice.processes = int(os.environ.get("SLURM_CPUS_PER_TASK", 8))
+    myLattice.processes = int(os.environ.get("SLURM_CPUS_PER_TASK", 1))
     myLattice.chunksize = 6*6*6*12
     plaquette = One_Cube_Plaquette()
     windingGeneral = General_Winding([0,0,0,0])
     action = Action()
     topcharge = TopologicalCharge()
-    #myLattice.parallel_chain(1, 0.01, 50, log=False)
-    myLattice.chain(1,0.01,50, log = False)
+    myLattice.parallel_chain(1, 0.01, 10, log=False)
+    #myLattice.chain(1,0.01,50, log = False)
 
 """momentum = myLattice.random_momentum()
     holder = []
