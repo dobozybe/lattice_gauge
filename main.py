@@ -41,7 +41,7 @@ if __name__ == "__main__":
         sys.exit()
 
     myLattice = Lattice([24,6,6,24], twistmatrix = twistmatrix) #24,6,6,24
-    myLattice.processes = int(os.environ.get("SLURM_CPUS_PER_TASK", 1))
+    myLattice.processes = int(os.environ.get("SLURM_CPUS_PER_TASK", 8))
     myLattice.chunksize = 6*6*6*12
     plaquette = One_Cube_Plaquette()
     windingGeneral = General_Winding([0,0,0,0])

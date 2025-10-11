@@ -29,47 +29,40 @@ def _make_staple_array(staple_index_array, link_array):
 
 
 def batched_single_node_momentum_update(dt, start,end, g): #ND numpy array nodecoords
-    global config
-    global staple_matrix_array
-    global Barray
-    global V2_Barray
 
-    print("updating momentum!!, processing batch: ", start, end)
 
     link_array = config[0][start:end + 1]
     momentum_array = config[1][start:end + 1]
     staple_matricies = staple_matrix_array[start:end + 1]
 
-    print("made staple matricies and link and momentum arrays in batch", start, end)
 
 
     # indicies are node, direction mu, direction nu, first/second term, list of staple matricies
 
     # extract staple matricies
-    print("extracting staple matricies")
+
     firststaplematricies, secondstaplematricies = np.split(staple_matricies, 2, axis=3)
 
     staple11, staple12, staple13 = np.split(firststaplematricies, 3, axis=4)
     staple21, staple22, staple23 = np.split(secondstaplematricies, 3, axis=4)
 
-    print("calculating twisted staple")
+
     # calculate the twisted staple for each nu (index 2)
-    firststaple = Barray[..., None, None][start:end+1] * staple11 @ staple12.conj().swapaxes(-1,
-                                                                                                 -2) @ staple13.conj().swapaxes(
-        -1, -2)
+
+
+    firststaple = Barray[..., None, None][start:end+1] * staple11 @ staple12.conj().swapaxes(-1,-2) @ staple13.conj().swapaxes(-1, -2)
     secondstaple = V2_Barray[..., None, None][start:end+1] * staple21.conj().swapaxes(-1,
                                                                                           -2) @ staple22.conj().swapaxes(
         -1, -2) @ staple23
 
 
-    print("getting full staple")
     # adding two terms together to get full staple then summing to get Vmu array. Squeeze to get rid of vestigal indicies
     staplesum = firststaple + secondstaple
 
     Varray = np.sum(staplesum, axis=2)
     Varray = np.squeeze(Varray)
 
-    print("updating momentum")
+
     # calculating momentum update
     stapleterm = link_array @ Varray
     momentum_change = (1 / g ** 2) * (stapleterm.conj().swapaxes(-1, -2) - stapleterm) * dt
@@ -78,7 +71,6 @@ def batched_single_node_momentum_update(dt, start,end, g): #ND numpy array nodec
 
     new_momentum_array = np.squeeze(new_momentum_array)
 
-    print("Done with batch: ", start, end)
     return new_momentum_array
 
 
@@ -130,6 +122,12 @@ def _worker_init(shm_staple_matrix_array_name, shm_config_name, shm_Barray_name,
     global staple_index_array
     global staple_matrix_array
 
+    global config_mem
+    global Barray_mem
+    global V2_Barray_mem
+    global staple_index_mem
+    global staple_matrix_mem
+
 
     config_mem = shared_memory.SharedMemory(name = shm_config_name)
     Barray_mem = shared_memory.SharedMemory(name=shm_Barray_name)
@@ -143,6 +141,8 @@ def _worker_init(shm_staple_matrix_array_name, shm_config_name, shm_Barray_name,
     staple_index_array = np.ndarray(staple_index_shape, dtype=staple_index_dtype, buffer = staple_index_mem.buf)
     staple_matrix_array = np.ndarray(staple_matrix_shape, dtype=np.complex128, buffer=staple_matrix_mem.buf)
     #print("process initialized!!")
+
+    #return config_mem, Barray_mem, V2_Barray_mem, staple_index_mem, staple_matrix_mem, config, Barray, V2_Barray, staple_index_array, staple_matrix_array
 
 
 def _parallel_time_evolve(initial_config, dt, staple_index_array, Barray, V2_Barray, g, processes, nsteps=10000):
@@ -185,7 +185,7 @@ def _parallel_time_evolve(initial_config, dt, staple_index_array, Barray, V2_Bar
                            np.shape(Barray), initial_config.dtype, Barray.dtype, staple_index_array.dtype)) as pool:
         _pool = pool
 
-        print("Now they've been initialized!")
+
         link_array = shared_config[0]
 
         momentum_inputs = [[dt/2, i * batch_size, np.min([(i + 1) * batch_size - 1, num_nodes - 1]), g] for i in
@@ -194,7 +194,7 @@ def _parallel_time_evolve(initial_config, dt, staple_index_array, Barray, V2_Bar
         new_momentum_array = np.reshape(new_momentum_array, newshape=array_shape)
         shared_config[:] = np.stack([link_array, new_momentum_array])
 
-        print("we made it past the first momentum update!")
+
 
         link_inputs = [[dt, i * batch_size, np.min([(i + 1) * batch_size - 1, num_nodes - 1])] for i in
                        range(processes)]
@@ -214,6 +214,7 @@ def _parallel_time_evolve(initial_config, dt, staple_index_array, Barray, V2_Bar
         new_momentum_array = np.reshape(new_momentum_array, newshape=array_shape)
         shared_config[:] = np.stack([link_array, new_momentum_array])
 
+    output_config = shared_config.copy()
     shm_config.close()
     shm_config.unlink()
     shm_Barray.close()
@@ -225,7 +226,7 @@ def _parallel_time_evolve(initial_config, dt, staple_index_array, Barray, V2_Bar
     shm_staple_matricies.close()
     shm_staple_matricies.unlink()
 
-    return shared_config
+    return output_config
 
 
 
