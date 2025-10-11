@@ -1,5 +1,12 @@
 import numpy as np
 import random
+import warnings
+
+
+warnings.filterwarnings(
+    "ignore",
+    message="Casting complex values to real discards the imaginary part"
+)
 
 def get_identity():
     return np.diag(np.full(2, 1))

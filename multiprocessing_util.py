@@ -5,26 +5,34 @@ os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
-import numpy as np
-
-
-
-import numpy as np
 from utilities import *
 import multiprocessing as mp
 import multiprocessing.shared_memory as shared_memory
+import numpy as np
+import time
+
 
 
 
 def _make_staple_array(staple_index_array, link_array):
     staple_matrix_array = np.zeros(np.shape(staple_index_array) + (2,), dtype=np.complex128)
-    for index, val in np.ndenumerate(staple_index_array):
-        staple_index = index[:-1]
-        if index[1] != index[2]:
-            entry =  staple_index_array[staple_index]
-            staple_matrix_array[staple_index] = link_array[tuple(entry)]
-        else:
-            continue
+
+    # Create a mask for where index[1] != index[2] (non-diagonal elements)
+    mask = np.ones(staple_index_array.shape[:3], dtype=bool)
+    diag_indices = np.arange(min(staple_index_array.shape[1], staple_index_array.shape[2]))
+    mask[:, diag_indices, diag_indices] = False
+
+    # Use advanced indexing to get all values at once
+    # staple_index_array[mask] has shape (N*4*3, 2, 3, 2)
+    # After transpose: (2, 3, 2, N*4*3)
+    # link_array indexing gives: (3, 2, N*4*3, 2, 2)
+    result = link_array[tuple(staple_index_array[mask].T)]
+
+    # Rearrange dimensions to match staple_matrix_array[mask] shape: (N*4*3, 2, 3, 2, 2)
+    result_reordered = result.transpose(2, 1, 0, 3, 4)
+
+    staple_matrix_array[mask] = result_reordered
+
     return staple_matrix_array
 
 
@@ -93,16 +101,28 @@ def parallel_evolution_step(_pool, config, staple_matrix_array, staple_index_arr
 
     array_shape = np.shape(link_array)
 
+
+    start = time.time()
     momentum_inputs = [[dt, i * batch_size, np.min([(i + 1) * batch_size-1, num_nodes-1]), g] for i in range(processes)]
     new_momentum_array = np.stack(pool.starmap(batched_single_node_momentum_update, momentum_inputs))
     new_momentum_array = np.reshape(new_momentum_array, newshape = array_shape)
     config[:] = np.stack([link_array, new_momentum_array])
+    print("momentum updated in", time.time()-start)
 
+    start = time.time()
     link_inputs = [[dt,i * batch_size, np.min([(i + 1) * batch_size-1, num_nodes-1])] for i in range(processes)]
     new_link_array = np.stack(pool.starmap(batched_single_node_link_update, link_inputs))
     new_link_array = np.reshape(new_link_array, newshape=array_shape)
+    print("link updated in", time.time()-start)
+
+
+    start = time.time()
     config[:] = np.stack([new_link_array, new_momentum_array])
+    print("stacked!", time.time()-start)
+
+    start = time.time()
     staple_matrix_array[:] = _make_staple_array(staple_index_array, config[0])[:]
+    print("staple matrix array updated", time.time()-start)
 
 
 
@@ -152,8 +172,6 @@ def _parallel_time_evolve(initial_config, dt, staple_index_array, Barray, V2_Bar
     batch_size = int(num_nodes/processes) #number of nodes over number of processes
 
 
-
-
     shm_config = shared_memory.SharedMemory(create=True, size=initial_config.nbytes)
     shared_config = np.ndarray(initial_config.shape, dtype=initial_config.dtype, buffer=shm_config.buf)
     shared_config[:] = initial_config[:]
@@ -188,14 +206,16 @@ def _parallel_time_evolve(initial_config, dt, staple_index_array, Barray, V2_Bar
 
         link_array = shared_config[0]
 
+
+        momen_start = time.time()
         momentum_inputs = [[dt/2, i * batch_size, np.min([(i + 1) * batch_size - 1, num_nodes - 1]), g] for i in
                            range(processes)]
         new_momentum_array = np.stack(pool.starmap(batched_single_node_momentum_update, momentum_inputs))
         new_momentum_array = np.reshape(new_momentum_array, newshape=array_shape)
         shared_config[:] = np.stack([link_array, new_momentum_array])
+        print("momentum updated in", time.time()-momen_start)
 
-
-
+        link_start = time.time()
         link_inputs = [[dt, i * batch_size, np.min([(i + 1) * batch_size - 1, num_nodes - 1])] for i in
                        range(processes)]
 
@@ -203,9 +223,10 @@ def _parallel_time_evolve(initial_config, dt, staple_index_array, Barray, V2_Bar
         new_link_array = np.reshape(new_link_array, newshape=array_shape)
         shared_config[:] = np.stack([new_link_array, new_momentum_array])
         shared_staple_matricies[:] = _make_staple_array(staple_index_array, shared_config[0])[:]
-
+        print("link updated in", time.time()-link_start)
 
         for i in range(nsteps - 1):
+            print("step", i)
             parallel_evolution_step(_pool, shared_config, shared_staple_matricies, shared_staple_index, dt, batch_size, num_nodes, processes, g)
 
         momentum_inputs = [[dt / 2, i * batch_size, np.min([(i + 1) * batch_size - 1, num_nodes - 1]), g] for i in
