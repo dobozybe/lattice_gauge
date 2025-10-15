@@ -110,23 +110,33 @@ def parallel_evolution_step(_pool, config, staple_matrix_array, staple_index_arr
 
     array_shape = np.shape(link_array)
 
+    new_momentum_array = np.empty(array_shape, dtype=link_array.dtype)
+    new_link_array = np.empty(array_shape, dtype=link_array.dtype)
+
 
     start = time.time()
     momentum_inputs = [[dt, i * batch_size, np.min([(i + 1) * batch_size-1, num_nodes-1]), g] for i in range(processes)]
-    new_momentum_array = np.stack(pool.starmap(batched_single_node_momentum_update, momentum_inputs))
-    new_momentum_array = np.reshape(new_momentum_array, newshape = array_shape)
-    shared_config = np.stack([link_array, new_momentum_array])
+    #new_momentum_array = np.stack(pool.starmap(batched_single_node_momentum_update, momentum_inputs))
+    for i, result in enumerate(pool.starmap(batched_single_node_momentum_update, momentum_inputs)):
+        new_momentum_array[i * batch_size:(i + 1) * batch_size] = result
+    print("momentum updated in", time.time()-start)
+
+    #new_momentum_array = np.reshape(new_momentum_array, newshape = array_shape)
+    shared_config[1] = new_momentum_array
     #print("momentum updated in", time.time()-start)
 
     start = time.time()
     link_inputs = [[dt,i * batch_size, np.min([(i + 1) * batch_size-1, num_nodes-1])] for i in range(processes)]
-    new_link_array = np.stack(pool.starmap(batched_single_node_link_update, link_inputs))
-    new_link_array = np.reshape(new_link_array, newshape=array_shape)
+    #new_link_array = np.stack(pool.starmap(batched_single_node_link_update, link_inputs))
+    for i, result in enumerate(pool.starmap(batched_single_node_link_update, link_inputs)):
+        new_link_array[i * batch_size:(i + 1) * batch_size] = result
+
+    #new_link_array = np.reshape(new_link_array, newshape=array_shape)
     #print("link updated in", time.time()-start)
 
 
     start = time.time()
-    shared_config = np.stack([new_link_array, new_momentum_array])
+    shared_config[0] =new_link_array
     #print("stacked!", time.time()-start)
 
     start = time.time()

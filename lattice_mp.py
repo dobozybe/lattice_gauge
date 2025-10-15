@@ -532,6 +532,31 @@ class Lattice:  # ND torus lattice
         #plt.show()
         return actionlist
 
+    def get_max_action_density_point(self):
+        link_array = np.array(list(self.get_link_matrix_dict().values()))
+
+        momentum_array = np.array([])
+
+        plaquette_matricies = utilities.make_plaquette_array([link_array, momentum_array],
+                                                             self.plaquette_corner_index_array)
+        first_link, second_link, third_link, fourth_link = np.split(plaquette_matricies, 4, axis=3)
+
+        plaquette_holonomies = first_link @ second_link @ third_link.conj().transpose(0, 1, 2, 3, 5,
+                                                                                      4) @ fourth_link.conj().transpose(
+            0, 1, 2, 3, 5, 4)
+
+        sum_contribs = np.squeeze(self.Barray, axis=(4, 3)) * np.squeeze(
+            np.trace(plaquette_holonomies, axis1=4, axis2=5))
+
+
+        plaquette_sum = np.sum(sum_contribs, axis=(1, 2))
+
+        node_action_contrib = (1 / self.g ** 2) * (
+                    2 * self.dimensions * (self.dimensions - 1) - plaquette_sum)
+        max_index = np.where(np.max(node_action_contrib) == node_action_contrib)[0][0]
+        return self.real_nodearray[max_index].tuplecoords
+
+
     def action_density_plot(self, plane,
                             planecoords):  # plane coords should be other coordinates in order with the plane coordinates removed
         xlist = range(self.shape[plane[0]])
@@ -545,6 +570,8 @@ class Lattice:  # ND torus lattice
                 actionlist[int(this_location[1])][int(this_location[0])] = np.real(
                     this_action)  # first index selects row and second selects column
         plt.pcolormesh(xlist, ylist, actionlist)
+
+
         titlestring = "with x"
         skipped = 0
         for i in range(self.dimensions):
@@ -756,7 +783,10 @@ class Lattice:  # ND torus lattice
         link_array = np.array(list(link_dict.values()))
 
         start = time.time()
-        staple_matricies = np.array([link_dict[link.node1.tuplecoords][link.direction] if link!=None else np.array([[0,0],[0,0]]) for link in self.staple_array.flatten()]).reshape(self.staple_array.shape + (2,2))
+        #staple_matricies = np.array([link_dict[link.node1.tuplecoords][link.direction] if link!=None else np.array([[0,0],[0,0]]) for link in self.staple_array.flatten()]).reshape(self.staple_array.shape + (2,2))
+
+        staple_matricies = mpu._make_staple_array(self.staple_index_array, link_array)
+
         print("stapes", time.time()-start)
         #indicies are node, direction mu, direction nu, first/second term, list of staple matricies
         start = time.time()
@@ -1033,8 +1063,7 @@ class Lattice:  # ND torus lattice
 
         momentum_contribution = 0.5 * np.sum(np.trace(momentum_array @ daggered_momentum, axis1 = 2, axis2 = 3), axis =(0,1))
 
-
-
+        #return np.real(momentum_contribution), np.real(action_contrib), np.real(momentum_contribution + action_contrib)
         return np.real(momentum_contribution + action_contrib)
 
 

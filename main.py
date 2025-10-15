@@ -31,7 +31,9 @@ def dicts_equal(d1, d2, tol=True):
             equal = False
     return equal
 
-
+#random momentum, on average, gives an energy of 124k. Meaning we can expect action to jump that much during time evolution.
+# Thus, for a large lattice, we need 124k/S_BPS < 0.01 for the simulation to stay within 1% of the BPS limit.
+#S_BPS = 4 pi^2/g^2, so g^2 * 3140 < 0.01, or g ~ 0.00178457557
 if __name__ == "__main__":
 
     twistmatrix = [[0, 0, 0, 1], [0, 0, 1, 0], [0, -1, 0, 0], [-1, 0, 0, 0]]
@@ -40,19 +42,22 @@ if __name__ == "__main__":
         print("Bad twist matrix!")
         sys.exit()
 
-    myLattice = Lattice([24,6,6,24], twistmatrix = twistmatrix) #24,6,6,24
+    myLattice = Lattice([24,6,6,24], twistmatrix = twistmatrix, filename="low_action_lattice_1") #24,6,6,24
     myLattice.processes = int(os.environ.get("SLURM_CPUS_PER_TASK", 8))
     myLattice.chunksize = 6*6*6*12
     plaquette = One_Cube_Plaquette()
     windingGeneral = General_Winding([0,0,0,0])
     action = Action()
     topcharge = TopologicalCharge()
-    myLattice.g = 0.01/np.sqrt(10)
+    #myLattice.g = 0.0017
+    myLattice.g=1
+    print("expected BPS", (4 * np.pi**2/myLattice.g**2))
+
     #myLattice.reduce_action(2, 1, 1000, log = False)
     #myLattice.save_links("low_action_lattice_1")
-    print(topcharge.evaluate(myLattice))
-    #myLattice.parallel_chain(315, 1, 1000, log = False)
+    myLattice.parallel_chain(1, 1, 1000, observables=[action, windingGeneral, topcharge])
     #myLattice.chain(1,1,100, log = False)
+
 
 
     #data = handle_observables("14-10-2025_10:13:08['genwinding[0, 0, 0, 0]', 'topcharge', 'action'][24, 6, 6, 24]_twists:[[0, 3], [1, 2]]", [action, windingGeneral, topcharge])
