@@ -84,3 +84,28 @@ def project(matrixarray):
     antisym = (matrixarray - np.transpose(matrixarray.conj(), axes=(*range(matrixarray.ndim - 2), -1, -2)))
     return (1 / 2) * antisym - (1 / 4) * np.trace(antisym, axis1 = -2, axis2 = -1)[...,np.newaxis, np.newaxis] * np.array([[1, 0], [0, 1]])
 
+def make_plaquette_array(config, plaquette_index_array):
+    link_array = config[0]
+    links_shape = np.shape(link_array)
+    num_nodes = links_shape[0]
+    dim = links_shape[1]
+
+    plaquette_matrix_array = np.zeros((num_nodes, dim, dim,4, 2,2), dtype = np.complex128)
+    mask = np.ones(plaquette_index_array.shape[:3], dtype=bool)
+    diag_indices = np.arange(min(plaquette_index_array.shape[1], plaquette_index_array.shape[2]))
+    mask[:, diag_indices, diag_indices] = False
+
+    #plaquette index array[mask] shape is (N * 4 * 3, 4,2). Transpose to (2,4,N*4*3)
+
+    result = link_array[tuple(plaquette_index_array[mask].T)] #should give (4, N*4*3) array of 2x2 matricies (links for each spot), so (4, N*4*3,2,2)
+
+
+
+    result_reordered = result.transpose(1,0,2,3)
+
+
+    plaquette_matrix_array[mask] = result_reordered
+
+    return plaquette_matrix_array
+
+

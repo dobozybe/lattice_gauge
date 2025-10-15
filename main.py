@@ -1,4 +1,4 @@
-from lattice_shared_mem_mp import *
+from lattice_mp import *
 from lattice import randomSU2
 import matplotlib.pyplot as plt
 import numpy as np
@@ -34,7 +34,7 @@ def dicts_equal(d1, d2, tol=True):
 
 if __name__ == "__main__":
 
-    twistmatrix = [[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]
+    twistmatrix = [[0, 0, 0, 1], [0, 0, 1, 0], [0, -1, 0, 0], [-1, 0, 0, 0]]
 
     if not np.all((np.array(twistmatrix) + np.array(twistmatrix).T) == 0):
         print("Bad twist matrix!")
@@ -47,8 +47,23 @@ if __name__ == "__main__":
     windingGeneral = General_Winding([0,0,0,0])
     action = Action()
     topcharge = TopologicalCharge()
-    myLattice.parallel_chain(1, 0.01, 10, log=False)
-    #myLattice.chain(1,0.01,50, log = False)
+    myLattice.g = 0.01/np.sqrt(10)
+    #myLattice.reduce_action(2, 1, 1000, log = False)
+    #myLattice.save_links("low_action_lattice_1")
+    print(topcharge.evaluate(myLattice))
+    #myLattice.parallel_chain(315, 1, 1000, log = False)
+    #myLattice.chain(1,1,100, log = False)
+
+
+    #data = handle_observables("14-10-2025_10:13:08['genwinding[0, 0, 0, 0]', 'topcharge', 'action'][24, 6, 6, 24]_twists:[[0, 3], [1, 2]]", [action, windingGeneral, topcharge])
+    #action.visualize(data)
+    #windingGeneral.visualize(data)
+    #topcharge.visualize(data)
+    #plt.show()
+
+
+
+
 
 """momentum = myLattice.random_momentum()
     holder = []

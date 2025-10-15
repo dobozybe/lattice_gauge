@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sympy.utilities.iterables import multiset_permutations
 from sympy.functions.special.tensor_functions import eval_levicivita
+import time
 
 #identifiers:
 #One_Cube_Plaquette: onecubeplaquette
@@ -21,10 +22,11 @@ def handle_observables(filename, observables):
 
 
 def plot_hist(data, title):
-    plt.figure()
+    plt.figure(figsize=(12, 6))  # Make figure wider
     datacounts, dataedges = np.histogram(data, bins=50)
-    plt.bar(dataedges[:-1], datacounts, width=np.diff(dataedges))
+    plt.bar(dataedges[:-1], datacounts, width=np.diff(dataedges), edgecolor='none')
     plt.title(title)
+    plt.tight_layout()
 
 class Observable:
     def __init__(self):
@@ -90,6 +92,7 @@ class General_Winding(Observable):
         self.basenodecoords = basenodecoords
         self.identifier = "genwinding" + str(self.basenodecoords)
     def evaluate(self, lattice):
+        start = time.time()
         shape = lattice.shape
         productarray = np.full((lattice.dimensions, 2,2), fill_value=np.array([[1,0],[0,1]]), dtype = np.complex128)
         outputlist = []
@@ -102,6 +105,7 @@ class General_Winding(Observable):
         holonomyarray = 0.5 * np.trace(productarray, axis1= 1, axis2 = 2)
         for direction in range(lattice.dimensions):
             outputlist.append([direction, holonomyarray[direction]])
+        #print("genwinding eval", time.time()-start)
         return outputlist
     def visualize(self, data):
         datalist = data[self.identifier]
@@ -113,8 +117,10 @@ class Action(Observable):
     def __init__(self):
         self.identifier = "action"
     def evaluate(self, lattice):
-        datalist = [lattice.get_action()]
-
+        start = time.time()
+        datalist = [lattice.vectorized_get_action()]
+        #print("action eval", time.time()-start)
+        print("action after time evolution", datalist[0])
         return datalist
     def visualize(self, data):
         datalist = data[self.identifier]
@@ -126,12 +132,14 @@ class TopologicalCharge(Observable):
     def __init__(self):
         self.identifier = "topcharge"
     def evaluate(self, lattice):
+        start = time.time()
         runningsum = 0
+        permslist = multiset_permutations(np.array(range(lattice.dimensions)))
         for node in lattice.real_nodearray:
-            for perm in multiset_permutations(np.array(range(lattice.dimensions))):
+            for perm in permslist:
                 runningsum+=eval_levicivita(*perm) * np.trace(lattice.get_plaquette_holonomy(node.coordinates, [perm[0],perm[1]]) @ lattice.get_plaquette_holonomy(node.coordinates, [perm[2],perm[3]]))
         datalist = [(-1/(32 * np.pi**2)) * runningsum]
-        print(datalist[0])
+        #print("topcharge eval", time.time()-start)
         return datalist
     def visualize(self, data):
         datalist = data[self.identifier]
