@@ -42,7 +42,7 @@ if __name__ == "__main__":
         print("Bad twist matrix!")
         sys.exit()
 
-    myLattice = Lattice([24,6,6,24], twistmatrix = twistmatrix, filename="low_action_lattice_1") #24,6,6,24
+    myLattice = Lattice([24,6,6,24], twistmatrix = twistmatrix) #24,6,6,24
     myLattice.processes = int(os.environ.get("SLURM_CPUS_PER_TASK", 8))
     myLattice.chunksize = 6*6*6*12
     plaquette = One_Cube_Plaquette()
