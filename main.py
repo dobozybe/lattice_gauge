@@ -42,21 +42,18 @@ if __name__ == "__main__":
         print("Bad twist matrix!")
         sys.exit()
 
-    myLattice = Lattice([24,6,6,24], twistmatrix = twistmatrix) #24,6,6,24
+    myLattice = Lattice([24,6,6,24], twistmatrix = twistmatrix, filename = "low_action_lattice_1") #24,6,6,24
     myLattice.processes = int(os.environ.get("SLURM_CPUS_PER_TASK", 8))
     myLattice.chunksize = 6*6*6*12
     plaquette = One_Cube_Plaquette()
     windingGeneral = General_Winding([0,0,0,0])
     action = Action()
     topcharge = TopologicalCharge()
-    #myLattice.g = 0.0017
-    myLattice.g=1
-    print("expected BPS", (4 * np.pi**2/myLattice.g**2))
+    myLattice.g = 0.0017
+    print("Expected BPS:", 4 * np.pi**2/myLattice.g**2)
 
-    #myLattice.reduce_action(2, 1, 1000, log = False)
-    #myLattice.save_links("low_action_lattice_1")
-    myLattice.parallel_chain(1, 1, 1000, observables=[action, windingGeneral, topcharge])
-    #myLattice.chain(1,1,100, log = False)
+    myLattice.parallel_chain(1, 0.1, 2000, observables=[action, windingGeneral, topcharge])
+
 
 
 

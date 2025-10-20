@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from sympy.utilities.iterables import multiset_permutations
 from sympy.functions.special.tensor_functions import eval_levicivita
 import time
+import utilities
 
 #identifiers:
 #One_Cube_Plaquette: onecubeplaquette
@@ -133,14 +134,44 @@ class TopologicalCharge(Observable):
         self.identifier = "topcharge"
     def evaluate(self, lattice):
         start = time.time()
-        runningsum = 0
-        permslist = multiset_permutations(np.array(range(lattice.dimensions)))
-        for node in lattice.real_nodearray:
-            for perm in permslist:
-                runningsum+=eval_levicivita(*perm) * np.trace(lattice.get_plaquette_holonomy(node.coordinates, [perm[0],perm[1]]) @ lattice.get_plaquette_holonomy(node.coordinates, [perm[2],perm[3]]))
+        link_array = np.array(list(lattice.get_link_matrix_dict().values()))
+
+        momentum_array = np.array([])
+
+        plaquette_matricies = utilities.make_plaquette_array([link_array, momentum_array],
+                                                             lattice.plaquette_corner_index_array)
+        first_link, second_link, third_link, fourth_link = np.split(plaquette_matricies, 4, axis=3)
+
+        plaquette_holonomies = first_link @ second_link @ third_link.conj().transpose(0, 1, 2, 3, 5,
+                                                                                      4) @ fourth_link.conj().transpose(
+            0, 1, 2, 3, 5, 4)
+
+        perms = np.array(list(multiset_permutations(np.array(range(lattice.dimensions)))))
+        levi_civita_values = np.array([eval_levicivita(*perm) for perm in perms])
+        print(np.shape(levi_civita_values))
+
+        plaq1 = plaquette_holonomies[:, perms[:, 0], perms[:, 1]]
+        plaq2 = plaquette_holonomies[:, perms[:, 2], perms[:, 3]]
+
+        products = plaq1 @ plaq2
+
+        traces = np.trace(products, axis1= -1, axis2=-2)
+        traces = traces.squeeze()
+
+
+        summed_traces = np.sum(traces, axis = 0)
+        perm_traces = levi_civita_values * summed_traces
+
+
+
+        runningsum = np.sum(perm_traces)
         datalist = [(-1/(32 * np.pi**2)) * runningsum]
-        #print("topcharge eval", time.time()-start)
+
         return datalist
+
+
+
+
     def visualize(self, data):
         datalist = data[self.identifier]
         plot_hist(datalist, "Topological Charge Histogram")

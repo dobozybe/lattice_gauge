@@ -9,7 +9,7 @@ from sympy import LeviCivita
 import multiprocessing as mp
 import multiprocessing.shared_memory
 
-import threading_util as mpu
+import multiprocessing_util as mpu
 
 from utilities import *
 
@@ -35,6 +35,7 @@ class Lattice:  # ND torus lattice
         self.filename = filename
         self.processes = 8
         self.plaquette_corner_dict = {}
+        self.plaquette_link_dict = {}
 
         self.v_second_plaquette_corner_dict = {}
         self.twistmatrix = np.zeros((len(shape), len(shape)))
@@ -117,6 +118,7 @@ class Lattice:  # ND torus lattice
                     if nu != mu:
                         plane = (mu,nu)
                         self.plaquette_corner_dict[(node, plane)] = self.get_plaquette_corners(node, plane)
+                        self.plaquette_link_dict[(node,plane)] = self.get_plaquette_links(node,plane)
                         self.v_second_plaquette_corner_dict[(node,plane)] = self.v2_second_plaquette_corners(node, plane)
                         self.Bdict[(node.tuplecoords, plane)] = self.B(plane[0], plane[1], node)
                         self.V2_Bdict[(node.tuplecoords, plane)] = self.B(plane[0], plane[1], self.translate(node, plane[1], -1))
@@ -317,7 +319,7 @@ class Lattice:  # ND torus lattice
         return [first_corner, second_corner, third_corner, fourth_corner]
 
     def get_plaquette_links(self, node, plane):  # ordered in correct orientation
-        corners = self.get_plaquette_corners(node, plane)
+        corners = self.plaquette_corner_dict[(node,plane)]
         first_corner = corners[0]
         second_corner = corners[1]
         third_corner = corners[2]
@@ -329,9 +331,8 @@ class Lattice:  # ND torus lattice
             fourth_corner.get_link(plane[1], 1)
         ]
         return linklist
-
     def get_plaquette_matricies(self, node, plane):
-        links = self.get_plaquette_links(node, plane)
+        links = self.plaquette_link_dict[(node,plane)]
         matrixlist = [
             links[0].get_matrix(),
             links[1].get_matrix(),
@@ -348,7 +349,7 @@ class Lattice:  # ND torus lattice
         """
         cornernode = self[cornercoords]
         product = np.diag([1, 1])
-        for matrix in self.get_plaquette_matricies(cornernode, plane):
+        for matrix in self.get_plaquette_matricies(cornernode, tuple(plane)):
             product = product @ matrix
         return product
 
