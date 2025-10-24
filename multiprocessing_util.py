@@ -1,4 +1,7 @@
 import os
+
+import utilities
+
 """os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
@@ -11,6 +14,8 @@ import multiprocessing.shared_memory as shared_memory
 import numpy as np
 import time
 
+this_momen_time = []
+this_link_time = []
 
 
 
@@ -18,7 +23,7 @@ def _make_staple_array(staple_index_array, link_array):
     staple_matrix_array = np.zeros(np.shape(staple_index_array) + (2,), dtype=np.complex128)
 
     # Create a mask for where index[1] != index[2] (non-diagonal elements)
-    mask = np.ones(staple_index_array.shape[:3], dtype=bool)
+    mask = np.ones(staple_index_array.shape[:3], dtype=np.bool_)
     diag_indices = np.arange(min(staple_index_array.shape[1], staple_index_array.shape[2]))
     mask[:, diag_indices, diag_indices] = False
 
@@ -36,7 +41,7 @@ def _make_staple_array(staple_index_array, link_array):
     return staple_matrix_array
 
 
-def batched_single_node_momentum_update(dt, start,end, g): #ND numpy array nodecoords
+def batched_single_node_momentum_update(dt, start,end, g, action): #ND numpy array nodecoords
 
 
     link_array = config[0][start:end + 1]
@@ -75,11 +80,56 @@ def batched_single_node_momentum_update(dt, start,end, g): #ND numpy array nodec
     stapleterm = link_array @ Varray
     momentum_change = (1 / g ** 2) * (stapleterm.conj().swapaxes(-1, -2) - stapleterm) * dt
 
-    new_momentum_array = momentum_array + momentum_change
+
+    new_momentum_array = momentum_array + momentum_change * (1 + extra_action_term_derivative(action))
 
     new_momentum_array = np.squeeze(new_momentum_array)
 
     return new_momentum_array
+
+
+
+def get_wilson_action(configuration = None, staple_index = None, barray = None): #assumes g=1
+    global config
+    global staple_matrix_array
+    if configuration is not None and staple_index is not None and barray is not None:
+        link_matricies = configuration[0]
+        staple_matricies = _make_staple_array(staple_index, link_matricies)
+        momentum_array = configuration[1]
+        Barray = barray
+    else:
+        link_matricies = config[0]
+        staple_matricies = staple_matrix_array
+    firststaplematricies, secondstaplematricies = np.split(staple_matricies, 2, axis=3)
+
+    staple11, staple12, staple13 = np.split(firststaplematricies, 3, axis=4)
+
+    firststaple = Barray[..., None, None] * staple11 @ staple12.conj().swapaxes(-1,-2) @ staple13.conj().swapaxes(-1, -2)
+
+    firststaple = np.sum(firststaple, axis = 2).squeeze()
+
+
+    sum_nu_plaquettes = link_matricies @ firststaple
+
+    holonomy = np.sum(np.trace(sum_nu_plaquettes, axis1 = -1, axis2 = -2), axis = (0,1))
+
+    shape = np.shape(link_matricies)
+
+    action = 2 * shape[0] * shape[1] * (shape[1]-1) - holonomy
+
+    daggered_momentum = momentum_array.conj().transpose(0, 1, 3, 2)
+
+    momentum_contribution = 0.5 * np.sum(np.trace(momentum_array @ daggered_momentum, axis1=2, axis2=3), axis=(0, 1))
+    """print("momentum", momentum_contribution)
+    print("wilson action", action)
+    print("fictitious action", extra_action_term(action))
+    print("total action", action + extra_action_term_derivative(action))
+    print("hamiltonian", action + extra_action_term_derivative(action) + momentum_contribution)"""
+    return action
+
+
+
+
 
 
 def batched_single_node_link_update(dt, start, end):
@@ -95,25 +145,26 @@ def batched_single_node_link_update(dt, start, end):
         return batch_out
 
 
-def parallel_evolution_step(_pool, config, staple_matrix_array, staple_index_array, dt, batch_size, num_nodes, processes, g):
+def parallel_evolution_step(_pool, config, staple_matrix_array, staple_index_array, dt, batch_size, num_nodes, processes, g, Barray):
+    #print('starting evolution step')
     pool = _pool
     link_array = config[0]
 
     array_shape = np.shape(link_array)
 
-
+    action = (1/g**2) * get_wilson_action(configuration=config, staple_index=staple_index_array, barray=Barray)
     start = time.time()
-    momentum_inputs = [[dt, i * batch_size, np.min([(i + 1) * batch_size-1, num_nodes-1]), g] for i in range(processes)]
+    momentum_inputs = [[dt, i * batch_size, np.min([(i + 1) * batch_size-1, num_nodes-1]), g, action] for i in range(processes)]
     new_momentum_array = np.stack(pool.starmap(batched_single_node_momentum_update, momentum_inputs))
     new_momentum_array = np.reshape(new_momentum_array, newshape = array_shape)
     config[:] = np.stack([link_array, new_momentum_array])
-    #print("momentum updated in", time.time()-start)
+    this_momen_time.append(time.time()-start)
 
     start = time.time()
     link_inputs = [[dt,i * batch_size, np.min([(i + 1) * batch_size-1, num_nodes-1])] for i in range(processes)]
     new_link_array = np.stack(pool.starmap(batched_single_node_link_update, link_inputs))
     new_link_array = np.reshape(new_link_array, newshape=array_shape)
-    #print("link updated in", time.time()-start)
+    this_link_time.append(time.time()-start)
 
 
     start = time.time()
@@ -207,12 +258,17 @@ def _parallel_time_evolve(initial_config, dt, staple_index_array, Barray, V2_Bar
         link_array = shared_config[0]
 
 
+        #print("first momentum update")
         momen_start = time.time()
-        momentum_inputs = [[dt/2, i * batch_size, np.min([(i + 1) * batch_size - 1, num_nodes - 1]), g] for i in
+        action = (1/g**2) * get_wilson_action(configuration=initial_config, staple_index=staple_index_array, barray = Barray)
+        momentum_inputs = [[dt/2, i * batch_size, np.min([(i + 1) * batch_size - 1, num_nodes - 1]), g, action] for i in
                            range(processes)]
         new_momentum_array = np.stack(pool.starmap(batched_single_node_momentum_update, momentum_inputs))
         new_momentum_array = np.reshape(new_momentum_array, newshape=array_shape)
         shared_config[:] = np.stack([link_array, new_momentum_array])
+        #print("end of first momentum update")
+
+
 
         link_start = time.time()
         link_inputs = [[dt, i * batch_size, np.min([(i + 1) * batch_size - 1, num_nodes - 1])] for i in
@@ -223,11 +279,20 @@ def _parallel_time_evolve(initial_config, dt, staple_index_array, Barray, V2_Bar
         shared_config[:] = np.stack([new_link_array, new_momentum_array])
         shared_staple_matricies[:] = _make_staple_array(staple_index_array, shared_config[0])[:]
 
+        action2 = (1 / g ** 2) * get_wilson_action(configuration=shared_config, staple_index=staple_index_array, barray=Barray)
+        #print("action change after first two steps", action2-action)
+        evstep = time.time()
         for i in range(nsteps - 1):
             #print("step", i)
-            parallel_evolution_step(_pool, shared_config, shared_staple_matricies, shared_staple_index, dt, batch_size, num_nodes, processes, g)
+            parallel_evolution_step(_pool, shared_config, shared_staple_matricies, shared_staple_index, dt, batch_size, num_nodes, processes, g, Barray)
+        print("time for evolution steps", time.time()-evstep)
+        print("average momentum time", np.average(this_momen_time))
+        print("average link time", np.average(this_link_time))
+        #print("last action in time evolve")
+        action = (1/g**2) * get_wilson_action(configuration=shared_config, staple_index=staple_index_array, barray = Barray)
 
-        momentum_inputs = [[dt / 2, i * batch_size, np.min([(i + 1) * batch_size - 1, num_nodes - 1]), g] for i in
+
+        momentum_inputs = [[dt / 2, i * batch_size, np.min([(i + 1) * batch_size - 1, num_nodes - 1]), g, action] for i in
                            range(processes)]
         new_momentum_array = np.stack(pool.starmap(batched_single_node_momentum_update, momentum_inputs))
         new_momentum_array = np.reshape(new_momentum_array, newshape=array_shape)

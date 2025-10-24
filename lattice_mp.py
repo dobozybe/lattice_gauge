@@ -9,7 +9,7 @@ from sympy import LeviCivita
 import multiprocessing as mp
 import multiprocessing.shared_memory
 
-import multiprocessing_util as mpu
+import numba_util as mpu
 
 from utilities import *
 
@@ -971,10 +971,10 @@ class Lattice:  # ND torus lattice
         momentum_array = np.array(list(momentum_dict.values()))
 
         config = np.stack([link_array, momentum_array])
-
+        parallelstart = time.time()
         config = mpu._parallel_time_evolve(config, dt, self.staple_index_array,self.Barray, self.V2_Barray, self.g, self.processes, nsteps = nsteps)
-
-        print("Elapsed time for time evolution:", time.time() - starttime)
+        print("Time for just parallel time evolve", time.time()-parallelstart)
+        print("Total time for time evolution:", time.time() - starttime)
 
         start = time.time()
         for node in self.real_nodearray:
@@ -1063,9 +1063,9 @@ class Lattice:  # ND torus lattice
         daggered_momentum = momentum_array.conj().transpose(0,1,3,2)
 
         momentum_contribution = 0.5 * np.sum(np.trace(momentum_array @ daggered_momentum, axis1 = 2, axis2 = 3), axis =(0,1))
-
+        print(momentum_contribution)
         #return np.real(momentum_contribution), np.real(action_contrib), np.real(momentum_contribution + action_contrib)
-        return np.real(momentum_contribution + action_contrib)
+        return np.real(momentum_contribution + action_contrib + extra_action_term(action_contrib))
 
 
     def get_config_action(self, configuration):
@@ -1268,7 +1268,7 @@ class Lattice:  # ND torus lattice
         for i in range(number_iterations):
             print("Action reduction iteration", i)
             self.action_min_sweep(15)
-            for k in range(5):
+            for k in range(1):
                 print("HMC iteration", k)
                 holder = []
                 for arraylist in list(momentum.values()):
@@ -1286,6 +1286,7 @@ class Lattice:  # ND torus lattice
                     observable_list.append(data)
                     print("accepted")
                 momentum = dict(zip(momentum.keys(),np.zeros(np.shape(list(momentum.values())))))
+            self.action_min_sweep(15)
             i+=1
 
         return

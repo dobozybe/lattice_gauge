@@ -1,13 +1,15 @@
 import numpy as np
 import random
 import warnings
-
+from numba import *
+set_num_threads(8)
 
 warnings.filterwarnings(
     "ignore",
     message="Casting complex values to real discards the imaginary part"
 )
 
+@njit
 def get_identity():
     return np.diag(np.full(2, 1))
 
@@ -25,9 +27,11 @@ def su2_exp(matrixarray):
     gen0 = np.broadcast_to(lie_gens[0].conj().T, matrixarray.shape)
     gen1 = np.broadcast_to(lie_gens[1].conj().T, matrixarray.shape)
     gen2 = np.broadcast_to(lie_gens[2].conj().T, matrixarray.shape)
+
     param1 = np.trace(matrixarray @ gen0, axis1=1, axis2=2)/2
     param2 = np.trace(matrixarray @ gen1, axis1=1, axis2=2)/2
     param3 = np.trace(matrixarray @ gen2, axis1=1, axis2=2)/2
+
 
     paramarray = np.stack([param1, param2, param3]).T
     normparams = np.sqrt(param1 ** 2 + param2 ** 2 + param3 ** 2)
@@ -43,6 +47,80 @@ def su2_exp(matrixarray):
     ) * np.sin(modded_normparams)[:, np.newaxis, np.newaxis]
     exp = exp.reshape(array_shape)
     return exp
+
+@njit
+def jit_2x2_mult(A,B):
+    output = np.zeros((2,2), dtype = np.complex128)
+    for i in range(2):
+        for j in range(2):
+            for k in range(2):
+                output[i,j] += A[i,k] * B[k,j]
+    return output
+
+@njit
+def jit_2x2_add(A,B):
+    output = np.zeros((2, 2), dtype=np.complex128)
+    for i in range(2):
+        for j in range(2):
+            output[i, j] = A[i, j] + B[i, j]
+    return output
+@njit
+def jit_2x2_scale(A, a):
+    output = np.zeros((2, 2), dtype=np.complex128)
+    for i in range(2):
+        for j in range(2):
+            output[i,j] = a * A[i,j]
+    return output
+
+
+@njit
+def jit_2x2_trace(A):
+    return A[0,0]+A[1,1]
+
+@njit
+def jit_2x2_dagger(A):
+    output = A.copy()
+    for i in range(2):
+        for j in range(2):
+            output[i,j] = np.conj(A[j,i])
+    return output
+
+@njit(parallel=True)
+def jit_su2_exp(inputarray): #input shape: (N, d, 2,2)
+    inshape = inputarray.shape
+    gen0 = jit_2x2_dagger(lie_gens[0])
+    gen1 = jit_2x2_dagger(lie_gens[1])
+    gen2 = jit_2x2_dagger(lie_gens[2])
+    outarray = np.ascontiguousarray(np.zeros(inshape, dtype=np.complex128))
+
+    for nodeindex in prange(inshape[0]):
+        paramarray = np.ascontiguousarray(np.zeros((3,), dtype=np.complex128))
+        for direction in range(inshape[1]):
+            sin_term = np.zeros((2,2), dtype=np.complex128)
+            thismatrix = inputarray[nodeindex, direction]
+            param1 = jit_2x2_trace(jit_2x2_mult(thismatrix, gen0))/2
+            param2 = jit_2x2_trace(jit_2x2_mult(thismatrix, gen1))/2
+            param3 = jit_2x2_trace(jit_2x2_mult(thismatrix, gen2))/2
+            paramarray[0]=param1
+            paramarray[1]=param2
+            paramarray[2]=param3
+            normparams = np.real(np.sqrt(param1**2+param2**2+param3**2))
+            modded_normparams = np.mod(normparams, 2 * np.pi)
+            if normparams == 0:
+                normparams = 1e-12
+            for i in range(3):
+                paramarray[i] = paramarray[i]/normparams
+            cos_term = jit_2x2_scale(get_identity(), np.cos(modded_normparams))
+            for j in range(3):
+                sin_term =jit_2x2_add(sin_term, jit_2x2_scale(lie_gens[j], paramarray[j]))
+            sin_term = jit_2x2_scale(sin_term, np.sin(modded_normparams))
+            final = jit_2x2_add(cos_term,sin_term)
+            for k in range(2):
+                for l in range(2):
+                    outarray[nodeindex, direction,k,l] = final[k,l]
+    return outarray
+
+
 
 
 def random_su2_matrix():
@@ -60,6 +138,34 @@ def random_su2_matrix():
 
 
 x = np.array([random_su2_matrix()])
+
+
+def extra_action_term(action):
+    Sbps = 37.91766269211075
+    A = 50
+
+    actiondif = np.abs(np.real((((action - Sbps)/Sbps))))
+    #print("action in hamiltonian", action)
+    if actiondif<0.01:
+        return 0
+    else:
+        return 0
+        #return A * (action - Sbps)**2
+        #return A * (np.exp(actiondif) - np.exp(0.01))
+
+def extra_action_term_derivative(action):
+    Sbps = 37.91766269211075
+    A = 50
+    actiondif = np.abs(np.real((((action - Sbps)/Sbps))))
+    #print("Extra action term derivative action dif", actiondif)
+    #print("exponentiating", np.exp(actiondif))
+    #print("action in derivative", action)
+    if actiondif < 0.01:
+        return 0
+    else:
+        return 0
+        #return 2 * A * (action - Sbps)
+        #return (A * 2 * (action-Sbps)/Sbps**2) * np.exp(actiondif)
 
 
 
@@ -91,7 +197,7 @@ def make_plaquette_array(config, plaquette_index_array):
     dim = links_shape[1]
 
     plaquette_matrix_array = np.zeros((num_nodes, dim, dim,4, 2,2), dtype = np.complex128)
-    mask = np.ones(plaquette_index_array.shape[:3], dtype=bool)
+    mask = np.ones(plaquette_index_array.shape[:3], dtype=np.bool_)
     diag_indices = np.arange(min(plaquette_index_array.shape[1], plaquette_index_array.shape[2]))
     mask[:, diag_indices, diag_indices] = False
 

@@ -11,6 +11,8 @@ import time
 from observables import *
 import multiprocessing
 import os
+from utilities import *
+
 
 
 
@@ -36,23 +38,44 @@ def dicts_equal(d1, d2, tol=True):
 #S_BPS = 4 pi^2/g^2, so g^2 * 3140 < 0.01, or g ~ 0.00178457557
 if __name__ == "__main__":
 
+    """testarray = np.zeros((10,4,2,2), dtype = np.complex128)
+
+    for i in range(10):
+        for j in range(4):
+            testarray[i,j] = randomSU2()
+
+    first = su2_exp(testarray)
+    second = su2_exp(testarray)
+
+    if np.all(first == second):
+        print("passed")
+    if np.any(first!=second):
+        issue = np.where(first!=second)
+        print("orig", first[issue])
+        print("new", second[issue])
+
+    sys.exit()"""
+
+
     twistmatrix = [[0, 0, 0, 1], [0, 0, 1, 0], [0, -1, 0, 0], [-1, 0, 0, 0]]
 
     if not np.all((np.array(twistmatrix) + np.array(twistmatrix).T) == 0):
         print("Bad twist matrix!")
         sys.exit()
 
-    myLattice = Lattice([24,6,6,24], twistmatrix = twistmatrix, filename = "low_action_lattice_1") #24,6,6,24
+    myLattice = Lattice([24,6,6,24], twistmatrix = twistmatrix, filename = "low_action_246624") #24,6,6,24
+    #myLattice= Lattice([8,4,4,8], twistmatrix=twistmatrix, filename="low_action_8448")
     myLattice.processes = int(os.environ.get("SLURM_CPUS_PER_TASK", 8))
-    myLattice.chunksize = 6*6*6*12
-    plaquette = One_Cube_Plaquette()
     windingGeneral = General_Winding([0,0,0,0])
     action = Action()
     topcharge = TopologicalCharge()
-    myLattice.g = 0.0017
+    myLattice.g = 1
+    #myLattice.g = 0.0017
     print("Expected BPS:", 4 * np.pi**2/myLattice.g**2)
+    #myLattice.reduce_action(2, 1, 100)
 
-    myLattice.parallel_chain(1, 0.1, 2000, observables=[action, windingGeneral, topcharge])
+    print(myLattice.parallel_chain(4, 1, 1000, observables=[action, windingGeneral, topcharge]))
+    #myLattice.chain(1, 1, 1000, observables=[action, windingGeneral, topcharge])
 
 
 
