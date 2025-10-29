@@ -9,7 +9,7 @@ from sympy import LeviCivita
 import multiprocessing as mp
 import multiprocessing.shared_memory
 
-import numba_util as mpu
+import cuda_utilities as mpu
 
 from utilities import *
 
@@ -108,8 +108,8 @@ class Lattice:  # ND torus lattice
         self.plaquette_corner_index_array = np.empty((len(self.real_nodearray), self.dimensions, self.dimensions, 4,2), dtype = int)
 
         self.staple_array = np.empty((len(self.real_nodearray), self.dimensions, self.dimensions, 2, 3), dtype = object)
-        self.Barray = np.empty((len(self.real_nodearray), self.dimensions, self.dimensions, 1, 1), dtype = np.complex64)
-        self.V2_Barray =np.empty((len(self.real_nodearray), self.dimensions, self.dimensions, 1, 1), dtype = np.complex64)
+        self.Barray = np.empty((len(self.real_nodearray), self.dimensions, self.dimensions, 1, 1), dtype = np.complex128)
+        self.V2_Barray =np.empty((len(self.real_nodearray), self.dimensions, self.dimensions, 1, 1), dtype = np.complex128)
         self.staple_index_array = np.empty((len(self.real_nodearray), self.dimensions, self.dimensions, 2, 3, 2), dtype = int) #link identified in link_array by base node index and direction. So dimensions are node, mu, nu, first/second term, link, and then [basenodeindex,direction]
         invalid_index = self.num_nodes * 70 #just to indicate that this index is invalid
         for nodeindex,node in enumerate(self.real_nodearray):
@@ -260,9 +260,9 @@ class Lattice:  # ND torus lattice
     def B(self, mu, nu, node):
         position = node.coordinates
         if (position[mu] == self.shape[mu] - 1) and (position[nu] == self.shape[nu] - 1):
-            return np.exp(-2 * np.pi * 1j * float(self.twistmatrix[mu][nu]) / self.SUN_dimension)
+            return np.complex128(np.exp(-2 * np.pi * 1j * float(self.twistmatrix[mu][nu]) / self.SUN_dimension))
         else:
-            return float(1)
+            return np.complex128(1)
 
     def save_links(self, filename):
         """while True:

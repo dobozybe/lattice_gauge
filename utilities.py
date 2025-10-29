@@ -2,7 +2,7 @@ import numpy as np
 import random
 import warnings
 from numba import *
-set_num_threads(8)
+set_num_threads(4)
 
 warnings.filterwarnings(
     "ignore",
@@ -57,6 +57,43 @@ def jit_2x2_mult(A,B):
                 output[i,j] += A[i,k] * B[k,j]
     return output
 
+@njit(parallel=True)
+def jit_2x2_mult_batch(A,B): #ashape, bshape = (n,k,2,2)
+    inshape = A.shape
+    outarray = np.empty(inshape, dtype=np.complex128)
+    for nodeindex in prange(inshape[0]):
+        for direction in range(inshape[1]):
+            outarray[nodeindex, direction] =jit_2x2_mult(A[nodeindex, direction], B[nodeindex, direction])
+    return outarray
+
+
+@njit(parallel=True, fastmath=True)
+def jit_2x2_mult_batch_fast(A, B):
+    """Optimized batch 2x2 matrix multiplication"""
+    n, k = A.shape[0], A.shape[1]
+    outarray = np.empty((n, k, 2, 2), dtype=np.complex128)
+
+    for nodeindex in prange(n):
+        for direction in range(k):
+            # Unroll the entire multiplication inline
+            outarray[nodeindex, direction, 0, 0] = (
+                    A[nodeindex, direction, 0, 0] * B[nodeindex, direction, 0, 0] +
+                    A[nodeindex, direction, 0, 1] * B[nodeindex, direction, 1, 0]
+            )
+            outarray[nodeindex, direction, 0, 1] = (
+                    A[nodeindex, direction, 0, 0] * B[nodeindex, direction, 0, 1] +
+                    A[nodeindex, direction, 0, 1] * B[nodeindex, direction, 1, 1]
+            )
+            outarray[nodeindex, direction, 1, 0] = (
+                    A[nodeindex, direction, 1, 0] * B[nodeindex, direction, 0, 0] +
+                    A[nodeindex, direction, 1, 1] * B[nodeindex, direction, 1, 0]
+            )
+            outarray[nodeindex, direction, 1, 1] = (
+                    A[nodeindex, direction, 1, 0] * B[nodeindex, direction, 0, 1] +
+                    A[nodeindex, direction, 1, 1] * B[nodeindex, direction, 1, 1]
+            )
+
+    return outarray
 @njit
 def jit_2x2_add(A,B):
     output = np.zeros((2, 2), dtype=np.complex128)
