@@ -61,10 +61,6 @@ def momentum_update(config, dt, staple_index_array, Barray, V2Barray, idx, out, 
     nodeindex = idx // numdims
     direction = idx % numdims
 
-
-    if idx == 0:
-        print("") #there for debug reasons, not entirely sure what's happening here
-
     #making the staple
 
 
@@ -77,49 +73,51 @@ def momentum_update(config, dt, staple_index_array, Barray, V2Barray, idx, out, 
     Vdirection[1, 0] = 0
     Vdirection[1, 1] = 0
 
+
     for i in range(numdims):
-        idx_tuple_1 = staple_index_array[nodeindex, direction,i, 0, 0]
-        idx_tuple_2 = staple_index_array[nodeindex, direction, i, 0, 1]
-        idx_tuple_3 = staple_index_array[nodeindex, direction, i, 0, 2]
-        idx_tuple_4 = staple_index_array[nodeindex, direction, i, 1, 0]
-        idx_tuple_5 = staple_index_array[nodeindex, direction, i, 1, 1]
-        idx_tuple_6 = staple_index_array[nodeindex, direction, i, 1, 2]
+        if i != direction:
+            idx_tuple_1 = staple_index_array[nodeindex, direction,i, 0, 0]
+            idx_tuple_2 = staple_index_array[nodeindex, direction, i, 0, 1]
+            idx_tuple_3 = staple_index_array[nodeindex, direction, i, 0, 2]
+            idx_tuple_4 = staple_index_array[nodeindex, direction, i, 1, 0]
+            idx_tuple_5 = staple_index_array[nodeindex, direction, i, 1, 1]
+            idx_tuple_6 = staple_index_array[nodeindex, direction, i, 1, 2]
 
-        staple_matrix_1 = links[idx_tuple_1[0], idx_tuple_1[1]]
-        staple_matrix_2 = links[idx_tuple_2[0], idx_tuple_2[1]]
-        staple_matrix_3 = links[idx_tuple_3[0], idx_tuple_3[1]]
+            staple_matrix_1 = links[idx_tuple_1[0], idx_tuple_1[1]]
+            staple_matrix_2 = links[idx_tuple_2[0], idx_tuple_2[1]]
+            staple_matrix_3 = links[idx_tuple_3[0], idx_tuple_3[1]]
 
-        staple_matrix_4 = links[idx_tuple_4[0], idx_tuple_4[1]]
-        staple_matrix_5 = links[idx_tuple_5[0], idx_tuple_5[1]]
-        staple_matrix_6 = links[idx_tuple_6[0], idx_tuple_6[1]]
-
-
-
-
-        Bval = Barray[nodeindex, direction, i]
-        V2Bval = V2Barray[nodeindex, direction, i]
-
-        #calculating first staple
-        dagger_2x2_cuda(staple_matrix_2, temp)
-
-        matmul_2x2_cuda(staple_matrix_1, temp, temp2)
-
-        dagger_2x2_cuda(staple_matrix_3, temp)
+            staple_matrix_4 = links[idx_tuple_4[0], idx_tuple_4[1]]
+            staple_matrix_5 = links[idx_tuple_5[0], idx_tuple_5[1]]
+            staple_matrix_6 = links[idx_tuple_6[0], idx_tuple_6[1]]
 
 
 
-        matmul_2x2_cuda(temp2, temp, temp2)
 
-        scale_2x2_cuda(temp2, Bval, temp2)
-        add_2x2_cuda(temp2, Vdirection, Vdirection)
+            Bval = Barray[nodeindex, direction, i]
+            V2Bval = V2Barray[nodeindex, direction, i]
 
-        # calculating second staple
-        dagger_2x2_cuda(staple_matrix_4, temp)
-        dagger_2x2_cuda(staple_matrix_5, temp2)
-        matmul_2x2_cuda(temp, temp2, temp2)
-        matmul_2x2_cuda(temp2, staple_matrix_6, temp2)
-        scale_2x2_cuda(temp2, V2Bval, temp2)
-        add_2x2_cuda(temp2, Vdirection, Vdirection)
+            #calculating first staple
+            dagger_2x2_cuda(staple_matrix_2, temp)
+
+            matmul_2x2_cuda(staple_matrix_1, temp, temp2)
+
+            dagger_2x2_cuda(staple_matrix_3, temp)
+
+
+
+            matmul_2x2_cuda(temp2, temp, temp2)
+
+            scale_2x2_cuda(temp2, Bval, temp2)
+            add_2x2_cuda(temp2, Vdirection, Vdirection)
+
+            # calculating second staple
+            dagger_2x2_cuda(staple_matrix_4, temp)
+            dagger_2x2_cuda(staple_matrix_5, temp2)
+            matmul_2x2_cuda(temp, temp2, temp2)
+            matmul_2x2_cuda(temp2, staple_matrix_6, temp2)
+            scale_2x2_cuda(temp2, V2Bval, temp2)
+            add_2x2_cuda(temp2, Vdirection, Vdirection)
 
 
     #calculating staple contribution
@@ -152,10 +150,6 @@ def evolution_step(config, dt, staple_index_array, Barray, V2Barray, idx, g, lie
 @cuda.jit
 def momentum_update_kernel(config, dt, staple_index_array_in, Barray_in, V2_Barray_in, g_in):
     idx = cuda.grid(1)
-    numnodes = config[0].shape[0]
-    numdims = config[0].shape[1]
-
-    total_matricies = numnodes * numdims
 
     momentum_update(config, dt, staple_index_array_in, Barray_in, V2_Barray_in, idx, config, g_in)
 
@@ -205,6 +199,10 @@ def time_evolve_kernel(config, dt, staple_index_array_in, Barray_in, V2_Barray_i
 
 def _parallel_time_evolve(initial_config, dt, staple_index_array_in, Barray_in, V2_Barray_in, g_in, processes, nsteps = 10000): #processes there for compatibility, ignore
 
+    print(np.shape(staple_index_array_in))
+    max_node_index = np.max(staple_index_array_in[:, :, :, :, :, 0])
+    print("Max node index in staple_index_array:", max_node_index)
+
     config = cuda.to_device(initial_config)
     staple_gpu = cuda.to_device(staple_index_array_in)
     Barray_gpu = cuda.to_device(np.squeeze(Barray_in))
@@ -248,9 +246,6 @@ def _parallel_time_evolve(initial_config, dt, staple_index_array_in, Barray_in, 
     momentum_update_kernel[blocks, threads_per_block](config, dt / 2, staple_gpu, Barray_gpu, V2Barray_gpu, g_in)
     cuda.synchronize()
     print("momentum updated")
-
-
-
     link_update_kernel[blocks, threads_per_block](config, dt, lie_gens)
 
     cuda.synchronize()
@@ -258,7 +253,7 @@ def _parallel_time_evolve(initial_config, dt, staple_index_array_in, Barray_in, 
     print("done initials")
 
     for i in range(nsteps-1):
-        print(i)
+        print(i, end="\r")
         momentum_update_kernel[blocks, threads_per_block](config, dt, staple_gpu, Barray_gpu, V2Barray_gpu, g_in)
         cuda.synchronize()
         link_update_kernel[blocks, threads_per_block](config, dt, lie_gens)
