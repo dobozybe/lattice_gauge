@@ -68,6 +68,44 @@ def trace_2x2_cuda(A):
     """Returns trace of 2x2 matrix"""
     return A[0, 0] + A[1, 1]
 
+
+@cuda.jit(device=True)
+def reunitarize_su2_cuda(U):
+    """
+    Reunitarize a 2x2 SU(2) matrix in place.
+    For SU(2), the second column is determined by the first column:
+    U = [[a, -conj(c)],
+         [c,  conj(a)]]
+    where |a|^2 + |c|^2 = 1
+    """
+    # First normalize the first column
+    norm_sq = (U[0, 0].real ** 2 + U[0, 0].imag ** 2 +
+               U[1, 0].real ** 2 + U[1, 0].imag ** 2)
+    norm = norm_sq ** 0.5
+
+    if norm > 0:
+        U[0, 0] = U[0, 0] / norm
+        U[1, 0] = U[1, 0] / norm
+
+    # Set second column based on first column
+    # U[0,1] = -conj(U[1,0])
+    # U[1,1] = conj(U[0,0])
+    U[0, 1] = complex(-U[1, 0].real, U[1, 0].imag)
+    U[1, 1] = complex(U[0, 0].real, -U[0, 0].imag)
+
+
+@cuda.jit(device=True, inline=True)
+def extra_term_derivative(action):
+    a = 0.1
+    S = 39.48
+    scale = 1
+    prefactor = 1 / (math.sqrt(math.pi) * a)
+    return -2 * scale * prefactor * (
+            (action - S + 0.1 * S) * math.exp(-(action - S + 0.1 * S) ** 2 / a ** 2) + (
+                action - S - 0.1 * S) * math.exp(-(action - S - 0.1 * S) ** 2 / a ** 2)
+    )
+
+
 @cuda.jit(device=True, inline=True)
 def su2_exp_cuda(inputmatrix, outputmatrix, lie_gens, idx): #input shape: (2,2)
 
@@ -137,4 +175,59 @@ def su2_exp_cuda(inputmatrix, outputmatrix, lie_gens, idx): #input shape: (2,2)
         print("param1 real:", param1.real)
         print("param2 real:", param2.real)"""
 
+@cuda.jit(device=True)
+def get_node_direction_action_contrib(idx, config, Barray, staple_index_array):
+    links = config[0]
+    inshape = links.shape
 
+    numnodes = inshape[0]
+    numdims = inshape[1]
+
+    total_matricies = numnodes * numdims
+
+    if idx >= total_matricies:
+        return
+
+
+    nodeindex = idx // numdims
+    direction = idx % numdims
+
+    #making the staple
+
+    tracecount = 0
+    temp = cuda.local.array((2, 2), dtype=complex128)
+    temp2 = cuda.local.array((2, 2), dtype=complex128)
+
+    this_matrix = links[nodeindex, direction]
+
+    for i in range(numdims):
+        if i != direction:
+            idx_tuple_1 = staple_index_array[nodeindex, direction,i, 0, 0]
+            idx_tuple_2 = staple_index_array[nodeindex, direction, i, 0, 1]
+            idx_tuple_3 = staple_index_array[nodeindex, direction, i, 0, 2]
+
+
+            staple_matrix_1 = links[idx_tuple_1[0], idx_tuple_1[1]]
+            staple_matrix_2 = links[idx_tuple_2[0], idx_tuple_2[1]]
+            staple_matrix_3 = links[idx_tuple_3[0], idx_tuple_3[1]]
+
+
+
+
+            Bval = Barray[nodeindex, direction, i]
+
+            matmul_2x2_cuda(this_matrix, staple_matrix_1, temp)
+
+            dagger_2x2_cuda(staple_matrix_2, temp2)
+
+            matmul_2x2_cuda(temp, temp2, temp)
+
+            dagger_2x2_cuda(staple_matrix_3, temp2)
+
+            matmul_2x2_cuda(temp, temp2, temp) #computed the [direction, i] plaquette holonomy
+
+            scale_2x2_cuda(temp, Bval, temp) #scaled by B[direction, i]
+
+            tracecount+=trace_2x2_cuda(temp)
+
+    return tracecount

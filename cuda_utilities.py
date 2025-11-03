@@ -37,13 +37,15 @@ def link_update(config, dt, idx, lie_gens): #out should have same shape as in, s
     su2_exp_cuda(temp, temp, lie_gens, idx)
     matmul_2x2_cuda(temp, links[nodeindex, direction], temp)
 
+    reunitarize_su2_cuda(temp)
+
     for i in range(2):
         for j in range(2):
             config[0][nodeindex, direction, i,j] = temp[i,j]
 
 
 @cuda.jit(device=True, inline= True)
-def momentum_update(config, dt, staple_index_array, Barray, V2Barray, idx, out, g):
+def momentum_update(config, dt, staple_index_array, Barray, V2Barray, idx, out, g, action):
 
     links = config[0]
     momentum = config[1]
@@ -131,6 +133,12 @@ def momentum_update(config, dt, staple_index_array, Barray, V2Barray, idx, out, 
     scale_2x2_cuda(temp, 1/g**2, temp)
     scale_2x2_cuda(temp, dt, temp)
 
+    # momentum change stored as temp, scaling by factor:
+
+    scale_factor = 1 + extra_term_derivative(action)
+
+    scale_2x2_cuda(temp, scale_factor, temp)
+
     #calculating new momentum
     add_2x2_cuda(momentum[nodeindex, direction], temp, temp2)
     for i in range(2):
@@ -139,69 +147,61 @@ def momentum_update(config, dt, staple_index_array, Barray, V2Barray, idx, out, 
 
 
 
+@cuda.jit(device = True, inline=True)
+def get_wilson_action(config, staple_index_array, Barray, g, idx):
 
+    links = config[0]
+    inshape = links.shape
 
-@cuda.jit(device = True, inline = True)
-def evolution_step(config, dt, staple_index_array, Barray, V2Barray, idx, g, lie_gens):
-    momentum_update(config, dt, staple_index_array, Barray, V2Barray, idx, config, g)
-    link_update(config, dt, idx, lie_gens, config)
-
-
-@cuda.jit
-def momentum_update_kernel(config, dt, staple_index_array_in, Barray_in, V2_Barray_in, g_in):
-    idx = cuda.grid(1)
-
-    momentum_update(config, dt, staple_index_array_in, Barray_in, V2_Barray_in, idx, config, g_in)
-
-
-@cuda.jit
-def link_update_kernel(config, dt, lie_gens):
-    idx = cuda.grid(1)
-    numnodes = config[0].shape[0]
-
-
-    numdims = config[0].shape[1]
-
-    total_matricies = numnodes * numdims
-
-    #print("started link")
-
-    link_update(config, dt, idx, lie_gens)
-
-
-def evolution_step_kernel(config, dt, staple_index_array, Barray, V2Barray, g, lie_gens):
-    idx = cuda.grid(1)
-    momentum_update(config, dt, staple_index_array, Barray, V2Barray, idx, config, g)
-    link_update(config, dt, idx, lie_gens, config)
-
-
-@cuda.jit
-def time_evolve_kernel(config, dt, staple_index_array_in, Barray_in, V2_Barray_in, g_in, nsteps, lie_gens):
-    idx = cuda.grid(1)
-    numnodes = config[0].shape[0]
-    numdims = config[0].shape[1]
+    numnodes = inshape[0]
+    numdims = inshape[1]
 
     total_matricies = numnodes * numdims
 
     if idx >= total_matricies:
         return
 
-    momentum_update(config, dt/2, staple_index_array_in, Barray_in, V2_Barray_in, idx, config, g_in)
 
 
-    link_update(config, dt, idx, lie_gens, config)
+    plaquette_contribs=get_node_direction_action_contrib(idx, config, Barray, staple_index_array)
 
-    for i in range(nsteps-1):
-        evolution_step(config, dt, staple_index_array_in, Barray_in, V2_Barray_in, idx, g_in, lie_gens)
+    total_contrib = (1/g**2) * (2 * (numdims-1) - plaquette_contribs)
 
-    momentum_update(config, dt/2, staple_index_array_in, Barray_in, V2_Barray_in, idx, config, g_in)
+
+    return total_contrib
+
+
+@cuda.jit
+def momentum_update_kernel(config, dt, staple_index_array_in, Barray_in, V2_Barray_in, g_in, action_in):
+    idx = cuda.grid(1)
+
+    momentum_update(config, dt, staple_index_array_in, Barray_in, V2_Barray_in, idx, config, g_in, action_in)
+
+
+@cuda.jit
+def link_update_kernel(config, dt, lie_gens):
+    idx = cuda.grid(1)
+
+    #print("started link")
+
+    link_update(config, dt, idx, lie_gens)
+
+@cuda.jit
+def wilson_action_kernel(config, staple_index_array, Barray, g, out):
+    idx = cuda.grid(1)
+
+    action_val = get_wilson_action(config, staple_index_array, Barray, g, idx)
+    if action_val is not None:  # Check if valid index
+        out[idx] = action_val.real  # Store real part
+    else:
+        pass
+
+
 
 
 def _parallel_time_evolve(initial_config, dt, staple_index_array_in, Barray_in, V2_Barray_in, g_in, processes, nsteps = 10000): #processes there for compatibility, ignore
 
-    print(np.shape(staple_index_array_in))
-    max_node_index = np.max(staple_index_array_in[:, :, :, :, :, 0])
-    print("Max node index in staple_index_array:", max_node_index)
+
 
     config = cuda.to_device(initial_config)
     staple_gpu = cuda.to_device(staple_index_array_in)
@@ -224,41 +224,38 @@ def _parallel_time_evolve(initial_config, dt, staple_index_array_in, Barray_in, 
 
     blocks = (num_matricies + threads_per_block - 1)//threads_per_block
 
-    # Before launching kernels
-    print("Free memory:", cuda.current_context().get_memory_info())
+    action_holder = np.zeros(num_matricies, dtype=np.complex128)
 
-    # Calculate how much memory you're using
-    numnodes = 24 * 6 * 6 * 24  # = 20736
-    numdims = 4  # I assume?
-    total_matricies = numnodes * numdims
+    gpu_action = cuda.to_device(action_holder)
 
-    # Each link is a 2x2 complex matrix = 2*2*16 bytes = 64 bytes
-    links_size = total_matricies * 64
-    momentum_size = total_matricies * 64
-    print(f"Links array: {links_size / 1e6:.1f} MB")
-    print(f"Momentum array: {momentum_size / 1e6:.1f} MB")
-    print(f"Staple index array: {staple_gpu.nbytes / 1e6:.1f} MB")
-    print(f"Total: {(links_size + momentum_size + staple_gpu.nbytes) / 1e6:.1f} MB")
+    wilson_action_kernel[blocks, threads_per_block](config, staple_gpu, Barray_gpu, g_in, gpu_action)
+    action=gpu_action.copy_to_host().sum()
 
-    print(f"Launching {blocks} blocks × {threads_per_block} threads = {blocks * threads_per_block} total threads")
-    print(f"For {total_matricies} matrices")
 
-    momentum_update_kernel[blocks, threads_per_block](config, dt / 2, staple_gpu, Barray_gpu, V2Barray_gpu, g_in)
-    cuda.synchronize()
-    print("momentum updated")
+    momentum_update_kernel[blocks, threads_per_block](config, dt / 2, staple_gpu, Barray_gpu, V2Barray_gpu, g_in, action)
+
+
     link_update_kernel[blocks, threads_per_block](config, dt, lie_gens)
 
-    cuda.synchronize()
-
-    print("done initials")
-
     for i in range(nsteps-1):
-        print(i, end="\r")
-        momentum_update_kernel[blocks, threads_per_block](config, dt, staple_gpu, Barray_gpu, V2Barray_gpu, g_in)
-        cuda.synchronize()
+        print(i, end = "\r")
+
+        wilson_action_kernel[blocks, threads_per_block](config, staple_gpu, Barray_gpu, g_in, gpu_action)
+        action = gpu_action.copy_to_host().sum()
+
+        momentum_update_kernel[blocks, threads_per_block](config, dt, staple_gpu, Barray_gpu, V2Barray_gpu, g_in, action)
         link_update_kernel[blocks, threads_per_block](config, dt, lie_gens)
 
-
-    momentum_update_kernel[blocks, threads_per_block](config, dt/2, staple_gpu, Barray_gpu, V2Barray_gpu, g_in)
+    wilson_action_kernel[blocks, threads_per_block](config, staple_gpu, Barray_gpu, g_in, gpu_action)
+    action = gpu_action.copy_to_host().sum()
+    momentum_update_kernel[blocks, threads_per_block](config, dt/2, staple_gpu, Barray_gpu, V2Barray_gpu, g_in, action)
 
     return config.copy_to_host()
+
+
+
+
+
+
+
+

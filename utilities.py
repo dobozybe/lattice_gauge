@@ -178,31 +178,22 @@ x = np.array([random_su2_matrix()])
 
 
 def extra_action_term(action):
-    Sbps = 37.91766269211075
-    A = 50
+    a = 0.1
+    S = 39.48
+    scale = 1
+    prefactor = 1/(np.sqrt(np.pi) * a)
+    return scale * prefactor * (np.exp(-(action - S + 0.1*S)**2/a**2) + np.exp(-(action - S - 0.1*S)**2/a**2))
 
-    actiondif = np.abs(np.real((((action - Sbps)/Sbps))))
-    #print("action in hamiltonian", action)
-    if actiondif<0.01:
-        return 0
-    else:
-        return 0
-        #return A * (action - Sbps)**2
-        #return A * (np.exp(actiondif) - np.exp(0.01))
 
 def extra_action_term_derivative(action):
-    Sbps = 37.91766269211075
-    A = 50
-    actiondif = np.abs(np.real((((action - Sbps)/Sbps))))
-    #print("Extra action term derivative action dif", actiondif)
-    #print("exponentiating", np.exp(actiondif))
-    #print("action in derivative", action)
-    if actiondif < 0.01:
-        return 0
-    else:
-        return 0
-        #return 2 * A * (action - Sbps)
-        #return (A * 2 * (action-Sbps)/Sbps**2) * np.exp(actiondif)
+    a = 0.1
+    S = 39.48
+    scale = 1
+    prefactor = 1 / (np.sqrt(np.pi) * a)
+    return -2 * scale * prefactor * (
+        (action - S + 0.1 * S)* np.exp(-(action - S + 0.1 * S) ** 2 / a ** 2) + (action - S - 0.1 * S)*np.exp(-(action - S - 0.1 * S) ** 2 / a ** 2)
+    )
+
 
 
 
@@ -223,7 +214,7 @@ def inSU2(matrix, tol=1e-10):
     return det_close and unitary
 
 
-def project(matrixarray):
+def project(matrixarray): #projects a matrix into su(2) lie algebra
     antisym = (matrixarray - np.transpose(matrixarray.conj(), axes=(*range(matrixarray.ndim - 2), -1, -2)))
     return (1 / 2) * antisym - (1 / 4) * np.trace(antisym, axis1 = -2, axis2 = -1)[...,np.newaxis, np.newaxis] * np.array([[1, 0], [0, 1]])
 
