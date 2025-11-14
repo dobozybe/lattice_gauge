@@ -47,7 +47,7 @@ if __name__ == "__main__":
         print("Bad twist matrix!")
         sys.exit()
 
-    myLattice = Lattice([8,4,4,8], twistmatrix = twistmatrix, filename = "low_action_8448") #24,6,6,24
+    myLattice = Lattice([8,4,4,8], twistmatrix = twistmatrix) #24,6,6,24
     #myLattice= Lattice([8,4,4,8], twistmatrix=twistmatrix, filename="low_action_8448")
     myLattice.processes = int(os.environ.get("SLURM_CPUS_PER_TASK", 8))
     windingGeneral = General_Winding([0,0,0,0])
@@ -57,8 +57,10 @@ if __name__ == "__main__":
     #myLattice.g = 0.01
     print("Expected BPS:", 4 * np.pi**2/myLattice.g**2)
     #myLattice.reduce_action(2, 1, 100)
-
-    print(myLattice.parallel_chain(4, 1, 1000, observables=[action, windingGeneral, topcharge]))
+    #print(myLattice.real_nodearray[1024])
+    #print(myLattice.parallel_chain(4, 1, 1000, observables=[action, windingGeneral, topcharge]))
+    running_result = 0
+    myLattice.grad_reduce_action(1, 1, 1000)
     #myLattice.chain(1, 1, 1000, observables=[action, windingGeneral, topcharge])
 
 

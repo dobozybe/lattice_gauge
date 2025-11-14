@@ -834,11 +834,6 @@ class Lattice:  # ND torus lattice
         new_momentum_array = np.stack(pool.starmap(self.single_node_momentum_update, inputs, chunksize = self.chunksize))
         return np.stack([link_array, new_momentum_array])
 
-
-
-
-
-
     def momentum_update(self, initial_config, dt):  # sends momentum at n*dt - dt/2 to n * dt + dt/2
         starttime = time.time()
         momentum_array = np.transpose(np.array(list(initial_config[1].values())), axes=[1, 0, 2,
@@ -958,7 +953,7 @@ class Lattice:  # ND torus lattice
 
 
 
-    def parallel_time_evolve(self, initial_config, evolution_time, nsteps=10000): #in this, configs are numpy arrays rather than dicts for performance reasons
+    def parallel_time_evolve(self, initial_config, evolution_time, nsteps=10000, scaling_param = 1): #in this, configs are numpy arrays rather than dicts for performance reasons
         starttime = time.time()
         new_momentum_dict = {}
         new_link_dict = {}
@@ -972,7 +967,7 @@ class Lattice:  # ND torus lattice
 
         config = np.stack([link_array, momentum_array])
         parallelstart = time.time()
-        config = mpu._parallel_time_evolve(config, dt, self.staple_index_array,self.Barray, self.V2_Barray, self.g, self.processes, nsteps = nsteps)
+        config = mpu._parallel_time_evolve(config, dt, self.staple_index_array,self.Barray, self.V2_Barray, self.g, self.processes, nsteps = nsteps, scaling_param = 1)
         print("Time for just parallel time evolve", time.time()-parallelstart)
         print("Total time for time evolution:", time.time() - starttime)
 
@@ -988,8 +983,8 @@ class Lattice:  # ND torus lattice
         new_configuration = self.time_evolve(current_configuration, evol_time, nsteps = number_steps)
         return new_configuration
 
-    def parallel_generate_candidate_configuration(self, current_configuration, evol_time, number_steps):
-        new_configuration = self.parallel_time_evolve(current_configuration, evol_time, nsteps = number_steps)
+    def parallel_generate_candidate_configuration(self, current_configuration, evol_time, number_steps, scaling_param = 1, deformation = False):
+        new_configuration = self.parallel_time_evolve(current_configuration, evol_time, nsteps = number_steps, scaling_param = 1)
         return new_configuration
 
 
@@ -1068,7 +1063,7 @@ class Lattice:  # ND torus lattice
         return np.real(momentum_contribution + action_contrib + extra_action_term(action_contrib))
 
 
-    def get_config_action(self, configuration):
+    def get_config_action(self, configuration, deformation = False):
         momentum_dict = configuration[1]
         momentum_array = np.array(list(momentum_dict.values()))
         link_array = np.array(list(configuration[0].values()))
@@ -1259,8 +1254,114 @@ class Lattice:  # ND torus lattice
 
 
 
+
+
+
+
+    """GRADIENT FLOW FUNCTIONS
+    
+    grad_reduce_action: HMC hamiltonian evolution code but accepts if new config has less action at all. Runs multiple times to find minimum of the action. Can incorporate deformation potentials.
+    
+    """
+    def grad_reduce_action(self, number_iterations, evolution_time, number_steps, scaling_param = 1, deformation = False):
+        starttime = time.time()
+        observable_list = []
+
+
+        acceptances = 0
+        scale_allowed = True
+        failures_count = 0
+
+
+        momentum = self.random_momentum()
+        old_config = [self.get_link_matrix_dict(), momentum.copy()]
+        for k in range(number_iterations):
+            if failures_count == 10: #if we've failed 10 times in a row, just stop and return whatever we have
+                break
+
+            momentum = dict(zip(momentum.keys(), np.zeros(np.shape(list(momentum.values())))))
+            old_config[1] = momentum
+
+            print("Gradient flow iteration", k)
+
+            oldaction =self.get_config_action(old_config)
+            print("action before", oldaction, "true oldaction", oldaction*scaling_param)
+            candidate = self.parallel_generate_candidate_configuration(old_config, evolution_time, number_steps, scaling_param = scaling_param, deformation = deformation)
+            newaction = self.get_config_action(candidate, deformation = deformation)
+            print("action after", newaction, "true newaction", newaction*scaling_param)
+            action_change_percent = np.abs((oldaction-newaction)/oldaction)
+
+
+            if newaction<=oldaction:
+                print("accepted")
+                failures_count = 0 #reset failures count if we've failed
+                percent_diff_from_BPS = np.abs((newaction * self.g**2 - 4 * np.pi**2)/(4 * np.pi**2))
+                old_config = candidate
+                if percent_diff_from_BPS <=0.1 and deformation == False:
+                    print("Within ", percent_diff_from_BPS*100, "% of BPS bound")
+
+                if percent_diff_from_BPS < 0.01 and deformation==False:
+                    print("within acceptable range of BPS")
+                    break
+                if action_change_percent < 0.05 and scale_allowed:
+                    scaling_param*=10
+            else:
+                print("Reached instability")
+                scale_allowed = False #if the scaling gets big enough that we're unstable, reduce it to what it was before and disallow scaling
+                scaling_param/=10
+                failures_count +=1
+
+            k+=1
+
+        #now update lattice with most recently accepted configuration (this is probably a bit slow since it's on CPU but will maybe be okay)
+        new_matrix_dict = dict(zip(self.real_nodearray, old_config[0].values()))
+        for node in self.real_nodearray:
+            for direction in range(self.dimensions):
+                self.link_dict[node][direction].set_matrix(new_matrix_dict[node][direction])
+
+        return
+
+
+    def grad_measure(self, number_configs, number_iterations, evolution_time, number_steps, observables, deformation = False, filename = None, log = True):
+        observable_list = []
+
+        for i in range(number_configs):
+            self.grad_reduce_action(number_iterations, evolution_time, number_steps, deformation= deformation)
+            observable_list.append(self.measure_observables(observables))
+            self.__init__(self.shape, twistmatrix=self.twistmatrix)
+
+        if (log == True or filename != None):
+            if filename != None:
+                with open("Cooling " + filename + str([obs.identifier for obs in observables]) + str(
+                        self.shape) + ".txt", "w") as f:
+                    for item in observable_list:
+                        f.write(f"{item}\n")
+            else:
+                with open("Cooling " + str(time.strftime("%d-%m-%Y_%H:%M:%S")) + str(
+                        [obs.identifier for obs in observables]) + str(
+                    self.shape) + ".txt", "w") as f:
+                    for item in observable_list:
+                        f.write(f"{item}\n")
+        return
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     """TEST FUNCTIONS FOR THEORIES"""
-    def reduce_action(self, number_iterations, evolution_time, number_steps, observables = None, filename = None, log = False):
+    def cooling_reduce_action(self, number_iterations, evolution_time, number_steps, observables = None, filename = None, log = False):
         starttime = time.time()
         observable_list = []
         acceptances = 0
@@ -1290,8 +1391,6 @@ class Lattice:  # ND torus lattice
             i+=1
 
         return
-
-
 
 
 

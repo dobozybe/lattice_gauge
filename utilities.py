@@ -182,6 +182,7 @@ def extra_action_term(action):
     S = 39.48
     scale = 1
     prefactor = 1/(np.sqrt(np.pi) * a)
+    return 0
     return scale * prefactor * (np.exp(-(action - S + 0.1*S)**2/a**2) + np.exp(-(action - S - 0.1*S)**2/a**2))
 
 
@@ -190,6 +191,7 @@ def extra_action_term_derivative(action):
     S = 39.48
     scale = 1
     prefactor = 1 / (np.sqrt(np.pi) * a)
+    return 0
     return -2 * scale * prefactor * (
         (action - S + 0.1 * S)* np.exp(-(action - S + 0.1 * S) ** 2 / a ** 2) + (action - S - 0.1 * S)*np.exp(-(action - S - 0.1 * S) ** 2 / a ** 2)
     )

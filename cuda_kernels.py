@@ -93,6 +93,16 @@ def reunitarize_su2_cuda(U):
     U[0, 1] = complex(-U[1, 0].real, U[1, 0].imag)
     U[1, 1] = complex(U[0, 0].real, -U[0, 0].imag)
 
+    result00 = (U[0][0].real * U[0][0].real + U[0][0].imag * U[0][0].imag +
+                U[0][1].real * U[0][1].real + U[0][1].imag * U[0][1].imag)
+    result11 = (U[1][0].real * U[1][0].real + U[1][0].imag * U[1][0].imag +
+                U[1][1].real * U[1][1].real + U[1][1].imag * U[1][1].imag)
+
+    # Crash if not unitary (diagonal elements should be 1)
+    if abs(result00 - 1.0) > 1e-6 or abs(result11 - 1.0) > 1e-6:
+        cuda.syncthreads()
+        U[0][0] = complex(1.0 / 0.0, 0.0)  # Division by zero to crash
+
 
 @cuda.jit(device=True, inline=True)
 def extra_term_derivative(action):
@@ -100,6 +110,7 @@ def extra_term_derivative(action):
     S = 39.48
     scale = 1
     prefactor = 1 / (math.sqrt(math.pi) * a)
+    return 0
     return -2 * scale * prefactor * (
             (action - S + 0.1 * S) * math.exp(-(action - S + 0.1 * S) ** 2 / a ** 2) + (
                 action - S - 0.1 * S) * math.exp(-(action - S - 0.1 * S) ** 2 / a ** 2)
@@ -211,8 +222,12 @@ def get_node_direction_action_contrib(idx, config, Barray, staple_index_array):
             staple_matrix_2 = links[idx_tuple_2[0], idx_tuple_2[1]]
             staple_matrix_3 = links[idx_tuple_3[0], idx_tuple_3[1]]
 
-
-
+            if staple_matrix_1[0][0] != staple_matrix_1[0][0]:
+                print("=== NaN in staple_matrix_1 at idx", idx, "===")
+            if staple_matrix_2[0][0] != staple_matrix_2[0][0]:
+                print("=== NaN in staple_matrix_2 at idx", idx, "===")
+            if staple_matrix_3[0][0] != staple_matrix_3[0][0]:
+                print("=== NaN in staple_matrix_3 at idx", idx, "===")
 
             Bval = Barray[nodeindex, direction, i]
 
@@ -230,4 +245,61 @@ def get_node_direction_action_contrib(idx, config, Barray, staple_index_array):
 
             tracecount+=trace_2x2_cuda(temp)
 
+
+
+
+
+    """if tracecount != tracecount:
+        print(idx, "bval", Bval.real)
+        print("temp")
+        print(temp[0][0].real, temp[0][0].imag)
+        print(temp[0][1].real, temp[0][1].imag)
+        print(temp[1][0].real, temp[1][0].imag)
+        print(temp[1][1].real, temp[1][1].imag)"""
+
+
+
     return tracecount
+
+
+
+@cuda.jit(device=True, inline = True)
+def polyakov_loop(basenodeindex,links, index_increment, time_length, out):
+    outarray = cuda.local.array((2,2), dtype = complex128)
+    startmatrix = links[basenodeindex,0]
+    outarray[0][0] = startmatrix[0][0]
+    outarray[0][1] = startmatrix[0][1]
+    outarray[1][0] = startmatrix[1][0]
+    outarray[1][1] = startmatrix[1][1]
+
+
+    for i in range(1, time_length):
+
+        nodeindex = (basenodeindex + index_increment * i) % (index_increment * time_length)
+        link_matrix = links[nodeindex, 0]
+
+
+        # Check unitarity: U * U^dagger diagonal elements should be 1
+        norm0 = link_matrix[0][0].real ** 2 + link_matrix[0][0].imag ** 2 + link_matrix[0][1].real ** 2 + \
+                link_matrix[0][1].imag ** 2
+        norm1 = link_matrix[1][0].real ** 2 + link_matrix[1][0].imag ** 2 + link_matrix[1][1].real ** 2 + \
+                link_matrix[1][1].imag ** 2
+
+        if abs(norm0 - 1.0) > 1e-6 or abs(norm1 - 1.0) > 1e-6:
+            print("=== Non-unitary link at node", nodeindex, "bnindex", basenodeindex, "i=", i, "norms:", norm0, norm1,
+                  "===")
+            print("Link:", link_matrix[0][0].real, link_matrix[0][0].imag, link_matrix[0][1].real,
+                  link_matrix[0][1].imag, link_matrix[1][0].real, link_matrix[1][0].imag, link_matrix[1][1].real,
+                  link_matrix[1][1].imag)
+
+
+        matmul_2x2_cuda(outarray, link_matrix, outarray)
+
+    mag = (outarray[0][0].real ** 2 + outarray[0][0].imag ** 2) ** 0.5
+    if mag > 1e10:
+        print("=== Polyakov loop overflow at node", basenodeindex, "mag =", mag, "===")
+
+    out[0][0] = outarray[0][0]
+    out[0][1] = outarray[0][1]
+    out[1][0] = outarray[1][0]
+    out[1][1] = outarray[1][1]
