@@ -238,8 +238,6 @@ def momentum_update(config, dt, staple_index_array, Barray, V2Barray, idx, g, ac
         additional_term = cuda.local.array((2,2), dtype = complex128)
         polyakov_loop(nodeindex, links, deformation[1], deformation[2], additional_term)
 
-        """if additional_term[0][0] != additional_term[0][0]:
-            print("=== NaN in polyakov_loop result at idx", idx, "===")"""
 
         dagger_2x2_cuda(additional_term, temp2)
         daggerlooptrace = trace_2x2_cuda(temp2)
@@ -261,9 +259,10 @@ def momentum_update(config, dt, staple_index_array, Barray, V2Barray, idx, g, ac
         """if additional_term[0][0] != additional_term[0][0]:
             print("=== NaN in additional_term after dagger subtraction at idx", idx, "daggerlooptrace of", daggerlooptrace.real,"===")"""
 
-        # scale by the coeff on the deformation potential
+        # scale by the coeff on the deformation potential and dt
 
         scale_2x2_cuda(additional_term, deformation_coeff, additional_term)
+        scale_2x2_cuda(additional_term, dt, additional_term)
 
         add_2x2_cuda(temp, additional_term, temp)
 
@@ -318,7 +317,7 @@ def get_deformation_contrib(config, deformation, idx):
     if idx <index_increment:
         this_loop_matrix = cuda.local.array((2,2),dtype=complex128)
         polyakov_loop(idx, links, deformation[1], deformation[2], this_loop_matrix)
-        looptrace = 0.5 * trace_2x2_cuda(this_loop_matrix)
+        looptrace = trace_2x2_cuda(this_loop_matrix)
         this_contrib = abs(looptrace**2)
         return this_contrib
     else:
@@ -353,7 +352,7 @@ def wilson_action_kernel(config, staple_index_array, Barray, g, scaling_param, o
         pass
 
 @cuda.jit
-def deformation_potential_kernel(config, deformation, scaling_param, coeff, out):
+def deformation_potential_kernel(config, deformation, scaling_param, coeff, out): #deformation is a [time length, index increment] list
     if deformation[0]!=0:
         idx = cuda.grid(1)
 
@@ -394,16 +393,18 @@ def check_unitarity(config):
 
 
 
-def _parallel_time_evolve(initial_config, dt, staple_index_array_in, Barray_in, V2_Barray_in, g_in, processes, nsteps = 10000, scaling_param = 1): #processes there for compatibility, ignore
+def _parallel_time_evolve(initial_config, dt, staple_index_array_in, Barray_in, V2_Barray_in, g_in, processes, nsteps = 10000, scaling_param = 1, deformation_data = None): #processes there for compatibility, ignore
+    #print("time evolve sees scaling param of,", scaling_param)
 
+    deformation = [0,0]
+    deformation_coeff = 0
+    if deformation_data != None:
+        deformation = np.array(deformation_data[0]) #this is the list of shape data
+        deformation_coeff = deformation_data[1]
 
-    #deformation = [0,0,0]
-    deformation = [1,128,8]
-    deformation_coeff = 1
+        deformation = np.array(deformation)
 
-    deformation = np.array(deformation)
-
-    check_unitarity(initial_config)
+    #check_unitarity(initial_config)
 
 
     config = cuda.to_device(initial_config)
@@ -444,7 +445,7 @@ def _parallel_time_evolve(initial_config, dt, staple_index_array_in, Barray_in, 
 
 
 
-    print("Action before", action + deformation_contrib, action, "/", deformation_contrib)
+    #print("Action before", action + deformation_contrib, action, "/", deformation_contrib)
 
     momentum_update_kernel[blocks, threads_per_block](config, dt / 2, staple_gpu, Barray_gpu, V2Barray_gpu, g_in, action,deformation, scaling_param, deformation_coeff)
 
@@ -471,7 +472,9 @@ def _parallel_time_evolve(initial_config, dt, staple_index_array_in, Barray_in, 
     deformation_potential_kernel[blocks, threads_per_block](config, deformation, scaling_param, deformation_coeff, gpu_deformation)
     deformation_contrib = gpu_deformation.copy_to_host().sum()
 
-    print("Action after", action + deformation_contrib,action, "/", deformation_contrib)
+
+    afteraction = action + deformation_contrib
+    #print("Action after", afteraction,action, "/", deformation_contrib)
 
     return config.copy_to_host()
 

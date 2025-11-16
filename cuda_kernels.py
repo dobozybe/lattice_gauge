@@ -274,9 +274,9 @@ def polyakov_loop(basenodeindex,links, index_increment, time_length, out):
 
 
     for i in range(1, time_length):
-
         nodeindex = (basenodeindex + index_increment * i) % (index_increment * time_length)
         link_matrix = links[nodeindex, 0]
+
 
 
         # Check unitarity: U * U^dagger diagonal elements should be 1

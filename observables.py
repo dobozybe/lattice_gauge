@@ -115,11 +115,25 @@ class General_Winding(Observable):
             plot_hist(holonomies_array[direction], "Winding loop in direction " + str(direction+1) + "with basepoint: " + str(self.basenodecoords))
 
 class Action(Observable):
-    def __init__(self):
+    def __init__(self, deformation_coeff = 0):
         self.identifier = "action"
+        self.deformation_coeff = deformation_coeff
     def evaluate(self, lattice):
         start = time.time()
-        datalist = [lattice.vectorized_get_action()]
+        links = lattice.get_link_matrix_dict()
+        momentum = dict(zip(links.keys(),np.zeros(np.shape(list(links.values())))))
+        config = [links,momentum]
+
+        if self.deformation_coeff !=0:
+            deformation_list = [1]  # should be 0/1 for yes/no, index_incrememnt, time_length
+            index_increment = 1
+            for i in range(1, len(lattice.shape)):
+                index_increment *= lattice.shape[i]
+            deformation_list.append(index_increment)
+            deformation_list.append(lattice.shape[0])
+        deformation_data = [1, [deformation_list, self.deformation_coeff]]
+
+        datalist = [lattice.get_config_action(config, deformation_data=deformation_data)[0]]
         #print("action eval", time.time()-start)
         print("action after time evolution", datalist[0])
         return datalist

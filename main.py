@@ -49,9 +49,11 @@ if __name__ == "__main__":
 
     myLattice = Lattice([8,4,4,8], twistmatrix = twistmatrix) #24,6,6,24
     #myLattice= Lattice([8,4,4,8], twistmatrix=twistmatrix, filename="low_action_8448")
-    myLattice.processes = int(os.environ.get("SLURM_CPUS_PER_TASK", 8))
+    deformation_coeff = 240
+
+
     windingGeneral = General_Winding([0,0,0,0])
-    action = Action()
+    action = Action(deformation_coeff=deformation_coeff)
     topcharge = TopologicalCharge()
     myLattice.g = 1
     #myLattice.g = 0.01
@@ -59,10 +61,12 @@ if __name__ == "__main__":
     #myLattice.reduce_action(2, 1, 100)
     #print(myLattice.real_nodearray[1024])
     #print(myLattice.parallel_chain(4, 1, 1000, observables=[action, windingGeneral, topcharge]))
-    running_result = 0
-    myLattice.grad_reduce_action(1, 1, 1000)
+    #running_result = 0
+    #myLattice.grad_reduce_action(1, 1, 1000)
     #myLattice.chain(1, 1, 1000, observables=[action, windingGeneral, topcharge])
 
+
+    myLattice.grad_measure(5, 10, 1, 1000, [topcharge, action], deformation= deformation_coeff, filename="test")
 
 
 
