@@ -971,8 +971,8 @@ class Lattice:  # ND torus lattice
         config = np.stack([link_array, momentum_array])
         parallelstart = time.time()
         config = mpu._parallel_time_evolve(config, dt, self.staple_index_array,self.Barray, self.V2_Barray, self.g, self.processes, nsteps = nsteps, scaling_param = scaling_param, deformation_data=deformation)
-        print("Time for just parallel time evolve", time.time()-parallelstart)
-        print("Total time for time evolution:", time.time() - starttime)
+        #print("Time for just parallel time evolve", time.time()-parallelstart)
+        #print("Total time for time evolution:", time.time() - starttime)
 
         start = time.time()
         for node in self.real_nodearray:
@@ -1327,7 +1327,6 @@ class Lattice:  # ND torus lattice
             momentum = dict(zip(momentum.keys(), np.zeros(np.shape(list(momentum.values())))))
             old_config[1] = momentum
 
-            print("Gradient flow iteration", k)
             #print("Current scaling param", scaling_param)
 
 
@@ -1336,7 +1335,7 @@ class Lattice:  # ND torus lattice
             oldwilson = actions[1]
             olddeformation = actions[2]
 
-            print("action before", oldaction, "true oldaction", oldaction/scaling_param, oldwilson,"/",olddeformation, )
+
             candidate = self.parallel_generate_candidate_configuration(old_config, evolution_time, number_steps, scaling_param = scaling_param, deformation = deformation)
 
             actions = self.get_config_action(candidate, deformation_data=[scaling_param, deformation])
@@ -1344,28 +1343,38 @@ class Lattice:  # ND torus lattice
             newwilson = actions[1]
             newdeformation = actions[2]
 
-            print("action after", newaction, "true newaction", newaction/scaling_param,  newwilson,"/",newdeformation)
-            action_change_percent = np.abs((oldaction-newaction)/oldaction)
 
+            action_change_percent = np.abs((oldaction-newaction)/oldaction)
+            if k % 50 == 0:
+                print("Gradient flow iteration", k)
+                print("action before", oldaction, "true oldaction", oldaction / scaling_param, oldwilson, "/",
+                      olddeformation)
+                print("action after", newaction, "true newaction", newaction / scaling_param, newwilson, "/",
+                      newdeformation)
 
             if newaction<=oldaction:
-                print("accepted")
+                #print("accepted")
                 failures_count = 0 #reset failures count if we've failed
                 percent_diff_from_BPS = np.abs((newaction * self.g**2 - 4 * np.pi**2)/(4 * np.pi**2))
                 old_config = candidate
                 if percent_diff_from_BPS <=0.1 and deformation == False:
+                    print("Gradient flow iteration", k)
                     print("Within ", percent_diff_from_BPS*100, "% of BPS bound")
 
                 if percent_diff_from_BPS < 0.01 and deformation==False:
                     print("within acceptable range of BPS")
                     break
-                if action_change_percent < 0.05 and scale_allowed:
-                    scaling_param*=10
-                    print("increasing scaling param to", scaling_param)
+
 
                 if action_change_percent < 0.1 and scale_allowed:
+                    print("Gradient flow iteration", k)
                     print("Action changed by", action_change_percent* 100, " percent")
+
+                if action_change_percent < 0.01 and scale_allowed:
+                    scaling_param*=10
+                    print("increasing scaling param to", scaling_param)
             else:
+                print("Gradient flow iteration", k)
                 print("Reached instability")
                 scale_allowed = False #if the scaling gets big enough that we're unstable, reduce it to what it was before and disallow scaling
                 scaling_param/=10

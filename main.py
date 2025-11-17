@@ -66,11 +66,11 @@ if __name__ == "__main__":
     #myLattice.chain(1, 1, 1000, observables=[action, windingGeneral, topcharge])
 
 
-    myLattice.grad_measure(5, 10, 1, 1000, [topcharge, action], deformation= deformation_coeff, filename="test")
+    myLattice.grad_measure(200, 1000, 1, 1000, [topcharge, action], deformation= deformation_coeff, filename="test")
 
 
 
-    #data = handle_observables("14-10-2025_10:13:08['genwinding[0, 0, 0, 0]', 'topcharge', 'action'][24, 6, 6, 24]_twists:[[0, 3], [1, 2]]", [action, windingGeneral, topcharge])
+    #data = handle_observables("Gradflow test['topcharge', 'action'][8, 4, 4, 8]", [action, topcharge])
     #action.visualize(data)
     #windingGeneral.visualize(data)
     #topcharge.visualize(data)
